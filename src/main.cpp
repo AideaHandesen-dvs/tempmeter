@@ -19,14 +19,25 @@ WebServer server(80);
 DNSServer dnsServer;
 Preferences prefs;
 
-const uint8_t SEG_T = 0b01111000; 
+const uint8_t SEG_T = 0b01111000;
 const uint8_t SEG_H = 0b01110100;
 const uint8_t SEG_AP[] = {0b01110111, 0b01110011, 0b00000000, 0b00000000};
+
+float currentTemp = 0;
+float currentHumidity = 0;
+float currentPressure = 0;
+String scannedSSIDs = "";
+
+void updateSensorData() {
+    currentTemp = bme.readTemperature();
+    currentHumidity = bme.readHumidity();
+    currentPressure = bme.readPressure() / 100.0F;
+}
 
 void updateDisplay(char type, float value) {
     uint8_t data[4];
     data[0] = (type == 't') ? SEG_T : SEG_H;
-    if (WiFi.status() == WL_CONNECTED) data[0] |= 0b10000000; 
+    if (WiFi.status() == WL_CONNECTED) data[0] |= 0b10000000;
 
     int val = (int)(value * 10);
     if (val < 0) val = 0;
@@ -37,77 +48,212 @@ void updateDisplay(char type, float value) {
     display.setSegments(data);
 }
 
+void scanNetworks() {
+    Serial.println("Scanning WiFi networks...");
+    int n = WiFi.scanNetworks();
+    scannedSSIDs = "";
+    
+    if (n > 0) {
+        String added[30];
+        int addedCount = 0;
+        
+        for (int i = 0; i < n && addedCount < 30; i++) {
+            String ssid = WiFi.SSID(i);
+            if (ssid.length() == 0) continue;
+            
+            bool isDup = false;
+            for (int j = 0; j < addedCount; j++) {
+                if (added[j] == ssid) { isDup = true; break; }
+            }
+            if (isDup) continue;
+            
+            added[addedCount++] = ssid;
+            int rssi = WiFi.RSSI(i);
+            String enc = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "" : "🔒";
+            
+            String signal;
+            if (rssi > -50) signal = "▂▄▆█";
+            else if (rssi > -60) signal = "▂▄▆_";
+            else if (rssi > -70) signal = "▂▄__";
+            else signal = "▂___";
+            
+            scannedSSIDs += "<option value='" + ssid + "'>" + enc + " " + ssid + " " + signal + "</option>";
+        }
+    }
+    WiFi.scanDelete();
+    Serial.println("Scan complete: " + String(n) + " networks");
+}
+
 String makeHTML() {
-    float t = bme.readTemperature();
-    float h = bme.readHumidity();
-    float p = bme.readPressure() / 100.0F;
+    updateSensorData();
 
     String s = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
-    s += "<style>body{font-family:sans-serif; background:#f4f4f4; text-align:center; padding:15px;}";
-    s += ".card{background:white; border-radius:15px; padding:20px; box-shadow:0 4px 6px rgba(0,0,0,0.1); margin-bottom:15px;}";
-    s += ".val{font-size:1.4em; font-weight:bold; margin:8px 0;}";
-    s += ".pass-container{position:relative; width:100%; margin:10px 0;}";
-    s += "input{font-size:1.1em; width:100%; padding:12px; border-radius:8px; border:1px solid #ccc; box-sizing:border-box;}";
-    s += ".toggle-btn{position:absolute; right:12px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:1.2em;}";
-    s += ".submit-btn{background:#007bff; color:white; border:none; padding:15px; width:100%; border-radius:8px; font-size:1.1em; cursor:pointer;}";
+    s += "<title>ESP32-C3 Sensor</title>";
+    s += "<style>";
+    s += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); min-height:100vh; margin:0; padding:15px; box-sizing:border-box;}";
+    s += ".container{max-width:400px; margin:0 auto;}";
+    s += ".card{background:white; border-radius:20px; padding:25px; box-shadow:0 10px 40px rgba(0,0,0,0.2); margin-bottom:20px;}";
+    s += "h1{margin:0 0 20px 0; color:#333; font-size:1.5em;}";
+    s += ".sensor-grid{display:grid; gap:15px;}";
+    s += ".sensor-item{background:linear-gradient(135deg,#f5f7fa 0%,#c3cfe2 100%); border-radius:15px; padding:20px; text-align:center;}";
+    s += ".sensor-value{font-size:2.5em; font-weight:bold; color:#333;}";
+    s += ".sensor-label{font-size:0.9em; color:#666; margin-top:5px;}";
+    s += ".temp .sensor-value{color:#e74c3c;}";
+    s += ".humid .sensor-value{color:#3498db;}";
+    s += ".press .sensor-value{color:#9b59b6;}";
+    s += "h2{margin:0 0 15px 0; color:#333; font-size:1.2em;}";
+    s += ".form-group{margin-bottom:15px;}";
+    s += "select,input[type='text'],input[type='password']{width:100%; padding:15px; border:2px solid #e0e0e0; border-radius:10px; font-size:1em; box-sizing:border-box; transition:border-color 0.3s; background:white;}";
+    s += "select{cursor:pointer;}";
+    s += "select:focus,input[type='text']:focus,input[type='password']:focus{border-color:#667eea; outline:none;}";
+    s += ".pass-container{position:relative;}";
+    s += ".toggle-btn{position:absolute; right:15px; top:50%; transform:translateY(-50%); cursor:pointer; font-size:1.2em; user-select:none;}";
+    s += ".btn{width:100%; padding:15px; border:none; border-radius:10px; font-size:1em; font-weight:bold; cursor:pointer; transition:transform 0.2s, box-shadow 0.2s;}";
+    s += ".btn:active{transform:scale(0.98);}";
+    s += ".btn-primary{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); color:white; box-shadow:0 4px 15px rgba(102,126,234,0.4);}";
+    s += ".btn-secondary{background:linear-gradient(135deg,#a8a8a8 0%,#888 100%); color:white; box-shadow:0 4px 15px rgba(0,0,0,0.2); margin-bottom:10px;}";
+    s += ".btn-danger{background:linear-gradient(135deg,#e74c3c 0%,#c0392b 100%); color:white; box-shadow:0 4px 15px rgba(231,76,60,0.4); margin-top:10px;}";
+    s += ".status{background:#e8f5e9; border-radius:10px; padding:15px; margin-bottom:20px;}";
+    s += ".status.disconnected{background:#ffebee;}";
+    s += ".status-label{font-size:0.85em; color:#666;}";
+    s += ".status-value{font-weight:bold; color:#333;}";
+    s += ".manual-input{display:none; margin-top:10px;}";
+    s += ".manual-input.show{display:block;}";
     s += "</style></head><body>";
-    
-    s += "<div class='card'><h1>ESP32-C3 Sensor</h1>";
-    s += "<p class='val'>温度: " + String(t, 1) + " ℃</p>";
-    s += "<p class='val'>湿度: " + String(h, 1) + " %</p>";
-    s += "<p class='val'>気圧: " + String(p, 1) + " hPa</p></div>";
-    
-    s += "<div class='card'><h3>WiFi設定</h3><form action='/save' method='get'>";
-    s += "<input name='s' placeholder='SSID' required><br>";
-    s += "<div class='pass-container'><input name='p' id='pass' type='password' placeholder='Password'>";
-    s += "<span class='toggle-btn' onclick='tPass()'>👁</span></div>";
-    s += "<input type='submit' class='submit-btn' value='設定を記録'></form></div>";
-    
-    s += "<script>function tPass(){var p=document.getElementById('pass');var b=document.querySelector('.toggle-btn');if(p.type==='password'){p.type='text';b.innerText='🔒';}else{p.type='password';b.innerText='👁';}}</script>";
-    s += "</body></html>";
+
+    s += "<div class='container'>";
+    s += "<div class='card'>";
+    s += "<h1>🌡️ ESP32-C3 Sensor</h1>";
+    s += "<div class='sensor-grid'>";
+    s += "<div class='sensor-item temp'><div class='sensor-value'>" + String(currentTemp, 1) + "°</div><div class='sensor-label'>温度 (℃)</div></div>";
+    s += "<div class='sensor-item humid'><div class='sensor-value'>" + String(currentHumidity, 1) + "%</div><div class='sensor-label'>湿度</div></div>";
+    s += "<div class='sensor-item press'><div class='sensor-value'>" + String(currentPressure, 0) + "</div><div class='sensor-label'>気圧 (hPa)</div></div>";
+    s += "</div></div>";
+
+    s += "<div class='card'>";
+    if (WiFi.status() == WL_CONNECTED) {
+        s += "<div class='status'>";
+        s += "<div class='status-label'>接続中</div>";
+        s += "<div class='status-value'>" + WiFi.SSID() + "</div>";
+        s += "<div class='status-label'>IP: " + WiFi.localIP().toString() + "</div>";
+        s += "</div>";
+    } else {
+        s += "<div class='status disconnected'>";
+        s += "<div class='status-label'>APモード</div>";
+        s += "<div class='status-value'>ESP32C3-Setup</div>";
+        s += "<div class='status-label'>IP: 192.168.4.1</div>";
+        s += "</div>";
+    }
+
+    s += "<h2>📶 WiFi設定</h2>";
+    s += "<form action='/save' method='get'>";
+    s += "<div class='form-group'>";
+    s += "<select name='s' id='ssidSelect' onchange='onSSIDChange()'>";
+    s += "<option value=''>-- ネットワークを選択 --</option>";
+    s += scannedSSIDs;
+    s += "<option value='__manual__'>✏️ 手動で入力...</option>";
+    s += "</select></div>";
+    s += "<div class='form-group manual-input' id='manualInput'>";
+    s += "<input type='text' id='manualSSID' placeholder='SSIDを入力'></div>";
+    s += "<button type='button' class='btn btn-secondary' onclick='location.href=\"/scan\"'>🔄 再スキャン</button>";
+    s += "<div class='form-group pass-container'><input type='password' name='p' id='pass' placeholder='パスワード'>";
+    s += "<span class='toggle-btn' onclick='togglePass()'>👁</span></div>";
+    s += "<button type='submit' class='btn btn-primary'>設定を保存</button>";
+    s += "</form>";
+    s += "<button class='btn btn-danger' onclick='if(confirm(\"WiFi設定をリセットしますか？\"))location.href=\"/reset\"'>設定をリセット</button>";
+    s += "</div></div>";
+
+    s += "<script>";
+    s += "function togglePass(){var p=document.getElementById('pass');var b=document.querySelector('.toggle-btn');if(p.type==='password'){p.type='text';b.textContent='🔒';}else{p.type='password';b.textContent='👁';}}";
+    s += "function onSSIDChange(){var sel=document.getElementById('ssidSelect');var manual=document.getElementById('manualInput');var manualField=document.getElementById('manualSSID');";
+    s += "if(sel.value==='__manual__'){manual.classList.add('show');manualField.required=true;}else{manual.classList.remove('show');manualField.required=false;}}";
+    s += "document.querySelector('form').onsubmit=function(){var sel=document.getElementById('ssidSelect');var manualField=document.getElementById('manualSSID');";
+    s += "if(sel.value==='__manual__'&&manualField.value){sel.name='';var h=document.createElement('input');h.type='hidden';h.name='s';h.value=manualField.value;this.appendChild(h);}return true;};";
+    s += "</script></body></html>";
+    return s;
+}
+
+String makeResultHTML(String ssid) {
+    String s = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+    s += "<style>";
+    s += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center; padding:15px; box-sizing:border-box;}";
+    s += ".card{background:white; border-radius:20px; padding:40px; box-shadow:0 10px 40px rgba(0,0,0,0.2); text-align:center; max-width:350px;}";
+    s += ".icon{font-size:4em; margin-bottom:20px;}h1{margin:0 0 10px 0; color:#333;}p{color:#666; margin:10px 0;}";
+    s += ".ssid{font-weight:bold; color:#333;}.warning{color:#e74c3c; font-weight:bold; margin-top:20px;}";
+    s += "</style></head><body><div class='card'><div class='icon'>✅</div><h1>設定完了</h1>";
+    s += "<p>SSID: <span class='ssid'>" + ssid + "</span></p>";
+    s += "<p class='warning'>⚡ 本体の電源を入れ直してください</p></div></body></html>";
+    return s;
+}
+
+String makeScanHTML() {
+    String s = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+    s += "<style>";
+    s += "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:linear-gradient(135deg,#667eea 0%,#764ba2 100%); min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center;}";
+    s += ".card{background:white; border-radius:20px; padding:40px; box-shadow:0 10px 40px rgba(0,0,0,0.2); text-align:center;}";
+    s += ".icon{font-size:4em; margin-bottom:20px; animation:spin 1s linear infinite;}";
+    s += "@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}";
+    s += "h1{margin:0 0 10px 0; color:#333;}p{color:#666;}";
+    s += "</style></head><body><div class='card'><div class='icon'>📡</div><h1>スキャン中...</h1>";
+    s += "<p>ネットワークを検索しています</p></div>";
+    s += "<script>setTimeout(function(){location.href='/';},100);</script></body></html>";
     return s;
 }
 
 void startAP() {
     Serial.println("Starting AP Mode...");
-    
-    // 完全にWiFiをリセット
+
+    // 完全停止
     WiFi.disconnect(true, true);
     WiFi.mode(WIFI_OFF);
     delay(500);
-    
-    // APモードに設定
+
+    // APモード開始
     WiFi.mode(WIFI_AP);
     delay(200);
-    
-    // SuperMini用: 送信電力を制限して電源安定化
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
-    delay(100);
-    
-    // IPアドレス設定
+
+    // IP設定
     IPAddress apIP(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(apIP, apIP, subnet);
     delay(100);
-    
+
     // AP起動
     bool apStarted = WiFi.softAP("ESP32C3-Setup", "", 1, false, 4);
+    delay(200);
+
+    // ★ softAP後にTxPower設定
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
+    delay(100);
     
+    Serial.print("TxPower after softAP: ");
+    Serial.println(WiFi.getTxPower());
+
+    // まだ34なら、さらに低い値を試す
+    if (WiFi.getTxPower() > 30) {
+        Serial.println("TxPower still high, trying lower...");
+        WiFi.setTxPower(WIFI_POWER_5dBm);
+        delay(100);
+        Serial.print("TxPower retry: ");
+        Serial.println(WiFi.getTxPower());
+    }
+
     if (apStarted) {
         Serial.println("=== AP Started ===");
         Serial.print("SSID: ESP32C3-Setup  CH: ");
         Serial.println(WiFi.channel());
         Serial.print("IP: ");
         Serial.println(WiFi.softAPIP());
-        Serial.print("TxPower: ");
+        Serial.print("Final TxPower: ");
         Serial.println(WiFi.getTxPower());
         display.setSegments(SEG_AP);
+        scanNetworks();
     } else {
         Serial.println("!!! AP FAILED !!!");
         delay(3000);
         ESP.restart();
     }
-    
+
     dnsServer.start(53, "*", apIP);
 }
 
@@ -115,7 +261,7 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
     Serial.println("\n\n=== ESP32-C3 SuperMini Sensor ===");
-    
+
     display.setBrightness(0x05);
     display.showNumberDec(8888);
 
@@ -126,15 +272,10 @@ void setup() {
         Serial.println("BME280 OK");
     }
 
-    // 起動時にWiFiを完全リセット
     WiFi.disconnect(true, true);
     WiFi.mode(WIFI_OFF);
     delay(500);
-    
-    // SuperMini用: 送信電力を制限
-    WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
-    // Preferencesから読み出し
     prefs.begin("wifi-store", true);
     String ssid = prefs.getString("ssid", "");
     String pass = prefs.getString("pass", "");
@@ -151,7 +292,7 @@ void setup() {
         WiFi.mode(WIFI_STA);
         WiFi.setTxPower(WIFI_POWER_8_5dBm);
         WiFi.begin(ssid.c_str(), pass.c_str());
-        
+
         int retry = 0;
         while (retry < 20) {
             delay(500);
@@ -174,34 +315,44 @@ void setup() {
         startAP();
     }
 
-    server.on("/", []() { server.send(200, "text/html", makeHTML()); });
+    server.on("/", HTTP_GET, []() {
+        server.send(200, "text/html", makeHTML());
+    });
 
-    server.on("/save", []() {
+    server.on("/scan", HTTP_GET, []() {
+        server.send(200, "text/html", makeScanHTML());
+        scanNetworks();
+    });
+
+    server.on("/save", HTTP_GET, []() {
         String ssid = server.arg("s");
         String pass = server.arg("p");
-        
         prefs.begin("wifi-store", false);
         prefs.putString("ssid", ssid);
         prefs.putString("pass", pass);
         prefs.end();
-        
-        String res = "<html><body style='text-align:center;padding-top:50px;font-family:sans-serif;'>";
-        res += "<h2>設定を記録しました</h2>";
-        res += "<p>SSID: " + ssid + "</p>";
-        res += "<p style='color:red;font-weight:bold;'>本体の電源を入れ直してください。</p>";
-        res += "</body></html>";
-        server.send(200, "text/html", res);
-        
-        Serial.println("Config Saved.");
+        server.send(200, "text/html", makeResultHTML(ssid));
+        Serial.println("Config Saved: " + ssid);
     });
 
-    server.on("/reset", []() {
+    server.on("/reset", HTTP_GET, []() {
         prefs.begin("wifi-store", false);
         prefs.clear();
         prefs.end();
-        server.send(200, "text/plain", "Cleared. Restarting...");
+        String s = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
+        s += "<style>body{font-family:sans-serif; background:linear-gradient(135deg,#e74c3c 0%,#c0392b 100%); min-height:100vh; margin:0; display:flex; align-items:center; justify-content:center;}";
+        s += ".card{background:white; border-radius:20px; padding:40px; text-align:center;}</style></head><body>";
+        s += "<div class='card'><div style='font-size:4em;'>🔄</div><h1>リセット完了</h1><p>再起動します...</p></div></body></html>";
+        server.send(200, "text/html", s);
+        Serial.println("Settings cleared. Restarting...");
         delay(1000);
         ESP.restart();
+    });
+
+    server.on("/api/data", HTTP_GET, []() {
+        updateSensorData();
+        String json = "{\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1) + ",\"pressure\":" + String(currentPressure, 1) + ",\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",\"ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.4.1") + "\"}";
+        server.send(200, "application/json", json);
     });
 
     server.onNotFound([]() {
@@ -223,8 +374,8 @@ void loop() {
     static bool showTemp = true;
     if (millis() - lastUpdate > 2000) {
         if (WiFi.getMode() != WIFI_AP) {
-            float val = showTemp ? bme.readTemperature() : bme.readHumidity();
-            updateDisplay(showTemp ? 't' : 'h', val);
+            updateSensorData();
+            updateDisplay(showTemp ? 't' : 'h', showTemp ? currentTemp : currentHumidity);
             showTemp = !showTemp;
         }
         lastUpdate = millis();
