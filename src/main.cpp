@@ -28,10 +28,92 @@ float currentHumidity = 0;
 float currentPressure = 0;
 String scannedSSIDs = "";
 
+#define BME_ADDR 0x76
+
+// BME280のチップID(0xD0レジスタ=0x60)をI2Cで直接読む。センサが応答して
+// いなければ0を返すので、「バスが生きているか」の判定に使う。
+uint8_t bmeChipId() {
+    Wire.beginTransmission(BME_ADDR);
+    Wire.write(0xD0);
+    if (Wire.endTransmission(false) != 0) return 0;      // NACK = 無応答
+    if (Wire.requestFrom((uint8_t)BME_ADDR, (uint8_t)1) != 1) return 0;
+    return Wire.read();
+}
+
+// I2Cバスリカバリ: スレーブがSDAを掴んだまま離さない(バスロック)状態を、
+// SCLを手動で最大9クロック叩いて解放させる定石。最後にSTOP条件を出す。
+void i2cBusRecover() {
+    Wire.end();
+    pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
+    pinMode(I2C_SDA, INPUT_PULLUP);
+    for (int i = 0; i < 9 && digitalRead(I2C_SDA) == LOW; i++) {
+        digitalWrite(I2C_SCL, LOW);
+        delayMicroseconds(5);
+        digitalWrite(I2C_SCL, HIGH);
+        delayMicroseconds(5);
+    }
+    // STOP: SCLがHighの間にSDAをLow→Highへ
+    pinMode(I2C_SDA, OUTPUT_OPEN_DRAIN);
+    digitalWrite(I2C_SDA, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SDA, HIGH);
+    delayMicroseconds(5);
+    Wire.begin(I2C_SDA, I2C_SCL);
+}
+
+// バス解放→センサ再初期化。数回リトライして復帰を試みる。
+bool recoverSensor() {
+    Serial.println("Recovering BME280...");
+    for (int attempt = 0; attempt < 3; attempt++) {
+        i2cBusRecover();
+        if (bme.begin(BME_ADDR, &Wire)) {
+            Serial.println("BME280 recovered");
+            return true;
+        }
+        delay(50);
+    }
+    Serial.println("BME280 recovery failed");
+    return false;
+}
+
 void updateSensorData() {
-    currentTemp = bme.readTemperature();
-    currentHumidity = bme.readHumidity();
-    currentPressure = bme.readPressure() / 100.0F;
+    float t = bme.readTemperature();
+    float h = bme.readHumidity();
+    float p = bme.readPressure() / 100.0F;
+
+    // ハング検知(758.60というマジックナンバーには依存しない):
+    //  1) NaN                         … 読み取り自体が失敗
+    //  2) チップIDが返らない          … I2Cバスが死んでいる
+    //  3) 気圧が完全に同一値のまま連続 … stale/バスロックで固まっている
+    // reads are ~2s間隔なので STUCK_LIMIT=5 で約10秒固まったら復帰動作に入る。
+    static const uint8_t STUCK_LIMIT = 5;
+    static float lastP = NAN;
+    static uint8_t stuckCount = 0;
+    if (p == lastP) {
+        if (stuckCount < 255) stuckCount++;
+    } else {
+        stuckCount = 0;
+        lastP = p;
+    }
+
+    bool frozen = isnan(t) || isnan(p) || bmeChipId() != 0x60 || stuckCount >= STUCK_LIMIT;
+
+    if (frozen) {
+        Serial.printf("Sensor frozen (p=%.2f, stuck=%u) -> recover\n", p, stuckCount);
+        if (recoverSensor()) {
+            stuckCount = 0;
+            lastP = NAN;
+            t = bme.readTemperature();
+            h = bme.readHumidity();
+            p = bme.readPressure() / 100.0F;
+        }
+    }
+
+    currentTemp = t;
+    currentHumidity = h;
+    currentPressure = p;
 }
 
 void updateDisplay(char type, float value) {
