@@ -100,3 +100,7 @@ The setup form submits over plain HTTP with `GET /save?s=…&p=…`, so the Wi-F
 password appears in the query string on an open access point. It is a
 once-per-network exposure on a link you control, but it is not good practice and
 a POST over the captive portal would be better.
+
+## License
+
+[MIT](LICENSE)
