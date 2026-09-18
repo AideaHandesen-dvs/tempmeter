@@ -4,16 +4,49 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <Preferences.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
 #include <TM1637Display.h>
 
+// ===========================================================================
+//  設定はここだけ（センサの型・ピン・読み周期）
+// ===========================================================================
+#define SENSOR_BME280 1
+#define SENSOR_AM2320 2
+
+// センサの型: ここを書き換えるか、platformio.ini の build_flags で
+//   -D SENSOR_TYPE=SENSOR_AM2320
+// と与える。
+#ifndef SENSOR_TYPE
+#define SENSOR_TYPE SENSOR_BME280
+#endif
+
+// ピン配置（board の型が変われば、直すのはここだけ）
 #define CLK 5
 #define DIO 2
 #define I2C_SDA 8
 #define I2C_SCL 9
 
-Adafruit_BME280 bme;
+// BME280 の I2C アドレス（0x77 で応える breakout も在る）
+#define BME280_ADDR 0x76
+
+// センサを読む周期。AM2320 の下限は 2.0 秒なので余裕を持たせる。
+#define SENSOR_INTERVAL_MS 3000
+// ===========================================================================
+
+#if SENSOR_TYPE == SENSOR_BME280
+  #include <Adafruit_Sensor.h>
+  #include <Adafruit_BME280.h>
+  #define SENSOR_NAME "BME280"
+  #define SENSOR_HAS_PRESSURE 1
+  Adafruit_BME280 sensor;
+#elif SENSOR_TYPE == SENSOR_AM2320
+  #include <AM232X.h>
+  #define SENSOR_NAME "AM2320"
+  #define SENSOR_HAS_PRESSURE 0
+  AM232X sensor;
+#else
+  #error "SENSOR_TYPE must be SENSOR_BME280 or SENSOR_AM2320"
+#endif
+
 TM1637Display display(CLK, DIO);
 WebServer server(80);
 DNSServer dnsServer;
@@ -25,13 +58,37 @@ const uint8_t SEG_AP[] = {0b01110111, 0b01110011, 0b00000000, 0b00000000};
 
 float currentTemp = 0;
 float currentHumidity = 0;
+#if SENSOR_HAS_PRESSURE
 float currentPressure = 0;
+#endif
 String scannedSSIDs = "";
 
+bool sensorBegin() {
+#if SENSOR_TYPE == SENSOR_BME280
+    return sensor.begin(BME280_ADDR, &Wire);
+#else
+    return sensor.begin();
+#endif
+}
+
+// センサを実際に叩くのはここだけ。呼び出すのは loop() だけで、
+// HTTP の処理からは呼ばない（AM2320 の 2.0 秒規則を外から破られないため）。
 void updateSensorData() {
-    currentTemp = bme.readTemperature();
-    currentHumidity = bme.readHumidity();
-    currentPressure = bme.readPressure() / 100.0F;
+#if SENSOR_TYPE == SENSOR_BME280
+    currentTemp = sensor.readTemperature();
+    currentHumidity = sensor.readHumidity();
+    currentPressure = sensor.readPressure() / 100.0F;
+#else
+    // 起こす作法と 2.0 秒の下限はライブラリ側が持っている。
+    // 早すぎた場合は直近の成功値がそのまま残る。
+    int rv = sensor.read();
+    if (rv == AM232X_OK || rv == AM232X_READ_TOO_FAST) {
+        currentTemp = sensor.getTemperature();
+        currentHumidity = sensor.getHumidity();
+    } else {
+        Serial.println("AM2320 read error: " + String(rv));
+    }
+#endif
 }
 
 void updateDisplay(char type, float value) {
@@ -85,8 +142,6 @@ void scanNetworks() {
 }
 
 String makeHTML() {
-    updateSensorData();
-
     String s = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
     s += "<title>ESP32-C3 Sensor</title>";
     s += "<style>";
@@ -127,7 +182,9 @@ String makeHTML() {
     s += "<div class='sensor-grid'>";
     s += "<div class='sensor-item temp'><div class='sensor-value'>" + String(currentTemp, 1) + "°</div><div class='sensor-label'>温度 (℃)</div></div>";
     s += "<div class='sensor-item humid'><div class='sensor-value'>" + String(currentHumidity, 1) + "%</div><div class='sensor-label'>湿度</div></div>";
+#if SENSOR_HAS_PRESSURE
     s += "<div class='sensor-item press'><div class='sensor-value'>" + String(currentPressure, 0) + "</div><div class='sensor-label'>気圧 (hPa)</div></div>";
+#endif
     s += "</div></div>";
 
     s += "<div class='card'>";
@@ -266,11 +323,12 @@ void setup() {
     display.showNumberDec(8888);
 
     Wire.begin(I2C_SDA, I2C_SCL);
-    if (!bme.begin(0x76, &Wire)) {
-        Serial.println("BME280 not found!");
+    if (!sensorBegin()) {
+        Serial.println(SENSOR_NAME " not found!");
     } else {
-        Serial.println("BME280 OK");
+        Serial.println(SENSOR_NAME " OK");
     }
+    updateSensorData();
 
     WiFi.disconnect(true, true);
     WiFi.mode(WIFI_OFF);
@@ -349,9 +407,14 @@ void setup() {
         ESP.restart();
     });
 
+    // 直近値を返すだけ。ここでセンサを叩くと、外から周期的に叩かれた分だけ
+    // 読みが増えて AM2320 の 2.0 秒規則を破る。
     server.on("/api/data", HTTP_GET, []() {
-        updateSensorData();
-        String json = "{\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1) + ",\"pressure\":" + String(currentPressure, 1) + ",\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",\"ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.4.1") + "\"}";
+        String json = "{\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1);
+#if SENSOR_HAS_PRESSURE
+        json += ",\"pressure\":" + String(currentPressure, 1);
+#endif
+        json += ",\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",\"ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.4.1") + "\"}";
         server.send(200, "application/json", json);
     });
 
@@ -372,9 +435,10 @@ void loop() {
 
     static unsigned long lastUpdate = 0;
     static bool showTemp = true;
-    if (millis() - lastUpdate > 2000) {
+    if (millis() - lastUpdate > SENSOR_INTERVAL_MS) {
+        // AP モードでも読む（表示は AP のまま、web ページには直近値が要る）
+        updateSensorData();
         if (WiFi.getMode() != WIFI_AP) {
-            updateSensorData();
             updateDisplay(showTemp ? 't' : 'h', showTemp ? currentTemp : currentHumidity);
             showTemp = !showTemp;
         }
