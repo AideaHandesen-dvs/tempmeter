@@ -4,7 +4,6 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <Preferences.h>
-#include <TM1637Display.h>
 
 // ===========================================================================
 //  設定はここだけ（センサの型・ピン・読み周期）
@@ -19,9 +18,18 @@
 #define SENSOR_TYPE SENSOR_BME280
 #endif
 
+// 表示器（TM1637）を使うか。押入れ等、誰も見ない場所に置くなら 0。
+// 0 にすると TM1637 は一切叩かず、CLK/DIO の 2 本と発熱がまるごと減る。
+// platformio.ini の build_flags で -D USE_DISPLAY=0 と与えてもよい。
+#ifndef USE_DISPLAY
+#define USE_DISPLAY 1
+#endif
+
 // ピン配置（board の型が変われば、直すのはここだけ）
+#if USE_DISPLAY
 #define CLK 5
 #define DIO 2
+#endif
 #define I2C_SDA 8
 #define I2C_SCL 9
 
@@ -30,6 +38,16 @@
 
 // センサを読む周期。AM2320 の下限は 2.0 秒なので余裕を持たせる。
 #define SENSOR_INTERVAL_MS 3000
+
+// I2C クロック。AM2320 は公称 100kHz までだが、実機（10cm のジャンパ、外付け 4.7k
+// プルアップ）で測ると 100kHz は 10 回中 10 回タイムアウト、80kHz 以下は CRC まで
+// 含めて 10/10 成功、という崖になっていた。境界から離して 50kHz を採る。
+// Arduino の既定は 100kHz なので、これを呼ばないと AM2320 は一切読めない。
+#if SENSOR_TYPE == SENSOR_AM2320
+#define I2C_CLOCK_HZ 50000
+#else
+#define I2C_CLOCK_HZ 100000
+#endif
 // ===========================================================================
 
 #if SENSOR_TYPE == SENSOR_BME280
@@ -47,14 +65,19 @@
   #error "SENSOR_TYPE must be SENSOR_BME280 or SENSOR_AM2320"
 #endif
 
-TM1637Display display(CLK, DIO);
+#if USE_DISPLAY
+  #include <TM1637Display.h>
+  TM1637Display display(CLK, DIO);
+#endif
 WebServer server(80);
 DNSServer dnsServer;
 Preferences prefs;
 
+#if USE_DISPLAY
 const uint8_t SEG_T = 0b01111000;
 const uint8_t SEG_H = 0b01110100;
 const uint8_t SEG_AP[] = {0b01110111, 0b01110011, 0b00000000, 0b00000000};
+#endif
 
 float currentTemp = 0;
 float currentHumidity = 0;
@@ -62,6 +85,10 @@ float currentHumidity = 0;
 float currentPressure = 0;
 #endif
 String scannedSSIDs = "";
+// 機体 ID。WiFi STA の MAC をそのまま使う。USB の /dev/serial/by-id に出る名前と
+// 同じ値になるので、有線で挿しても無線で叩いても同じ識別子で個体を指せる。
+// DHCP でアドレスが変わっても追えるように、IP とは別に持つ。
+String deviceId = "";
 
 bool sensorBegin() {
 #if SENSOR_TYPE == SENSOR_BME280
@@ -91,6 +118,7 @@ void updateSensorData() {
 #endif
 }
 
+#if USE_DISPLAY
 void updateDisplay(char type, float value) {
     uint8_t data[4];
     data[0] = (type == 't') ? SEG_T : SEG_H;
@@ -104,6 +132,7 @@ void updateDisplay(char type, float value) {
     data[3] = display.encodeDigit(val % 10);
     display.setSegments(data);
 }
+#endif
 
 void scanNetworks() {
     Serial.println("Scanning WiFi networks...");
@@ -193,12 +222,15 @@ String makeHTML() {
         s += "<div class='status-label'>接続中</div>";
         s += "<div class='status-value'>" + WiFi.SSID() + "</div>";
         s += "<div class='status-label'>IP: " + WiFi.localIP().toString() + "</div>";
+        s += "<div class='status-label'>電波: " + String(WiFi.RSSI()) + " dBm</div>";
+        s += "<div class='status-label'>ID: " + deviceId + "</div>";
         s += "</div>";
     } else {
         s += "<div class='status disconnected'>";
         s += "<div class='status-label'>APモード</div>";
         s += "<div class='status-value'>ESP32C3-Setup</div>";
         s += "<div class='status-label'>IP: 192.168.4.1</div>";
+        s += "<div class='status-label'>ID: " + deviceId + "</div>";
         s += "</div>";
     }
 
@@ -303,7 +335,9 @@ void startAP() {
         Serial.println(WiFi.softAPIP());
         Serial.print("Final TxPower: ");
         Serial.println(WiFi.getTxPower());
+#if USE_DISPLAY
         display.setSegments(SEG_AP);
+#endif
         scanNetworks();
     } else {
         Serial.println("!!! AP FAILED !!!");
@@ -319,10 +353,13 @@ void setup() {
     delay(1000);
     Serial.println("\n\n=== ESP32-C3 SuperMini Sensor ===");
 
+#if USE_DISPLAY
     display.setBrightness(0x05);
     display.showNumberDec(8888);
+#endif
 
     Wire.begin(I2C_SDA, I2C_SCL);
+    Wire.setClock(I2C_CLOCK_HZ);
     if (!sensorBegin()) {
         Serial.println(SENSOR_NAME " not found!");
     } else {
@@ -373,6 +410,9 @@ void setup() {
         startAP();
     }
 
+    deviceId = WiFi.macAddress();
+    Serial.println("Device ID: " + deviceId);
+
     server.on("/", HTTP_GET, []() {
         server.send(200, "text/html", makeHTML());
     });
@@ -410,11 +450,17 @@ void setup() {
     // 直近値を返すだけ。ここでセンサを叩くと、外から周期的に叩かれた分だけ
     // 読みが増えて AM2320 の 2.0 秒規則を破る。
     server.on("/api/data", HTTP_GET, []() {
-        String json = "{\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1);
+        bool up = (WiFi.status() == WL_CONNECTED);
+        String json = "{\"id\":\"" + deviceId + "\"";
+        json += ",\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1);
 #if SENSOR_HAS_PRESSURE
         json += ",\"pressure\":" + String(currentPressure, 1);
 #endif
-        json += ",\"wifi_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",\"ip\":\"" + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "192.168.4.1") + "\"}";
+        json += ",\"wifi_connected\":" + String(up ? "true" : "false");
+        // 電波強度は繋がっている時だけ。AP モードでは意味を持たないので、
+        // pressure と同じ流儀でキーごと出さない（null は返さない）。
+        if (up) json += ",\"rssi\":" + String(WiFi.RSSI());
+        json += ",\"ip\":\"" + (up ? WiFi.localIP().toString() : "192.168.4.1") + "\"}";
         server.send(200, "application/json", json);
     });
 
@@ -434,14 +480,18 @@ void loop() {
     server.handleClient();
 
     static unsigned long lastUpdate = 0;
+#if USE_DISPLAY
     static bool showTemp = true;
+#endif
     if (millis() - lastUpdate > SENSOR_INTERVAL_MS) {
         // AP モードでも読む（表示は AP のまま、web ページには直近値が要る）
         updateSensorData();
+#if USE_DISPLAY
         if (WiFi.getMode() != WIFI_AP) {
             updateDisplay(showTemp ? 't' : 'h', showTemp ? currentTemp : currentHumidity);
             showTemp = !showTemp;
         }
+#endif
         lastUpdate = millis();
     }
 }
