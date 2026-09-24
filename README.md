@@ -212,6 +212,90 @@ stddev_over_time(esp32_temperature_celsius[1h]) == 0
 catches a stuck sensor on either part, with no firmware change and without
 needing a barometer to sanity-check.
 
+## When two sensors disagree
+
+Three units ran side by side for an afternoon: two AM2320 builds and one
+BME280 build, all on the same firmware. They had been in two different
+locations, reading 3.3–3.6 °C apart and holding that gap steadily for an hour.
+Moved into the same air and logged at 15-second intervals, the spread collapsed:
+
+| | Spread across three units |
+| --- | --- |
+| In their installed positions | 3.3–3.6 °C |
+| Same air, settled | 0.3–0.5 °C |
+
+A persistent, repeatable temperature difference between units in different
+places is the places, until they have been in the same air and the difference
+survives. It is worth doing before concluding anything about the parts: it costs
+an afternoon and it settled the question outright.
+
+Humidity did not collapse. In the same air at 28.5 °C:
+
+| Part | Humidity |
+| --- | --- |
+| BME280 | 66.6–67.1 % |
+| AM2320 | 74.1–75.0 % |
+| AM2320 | 74.3–75.2 % |
+
+The two AM2320s agree with each other to within 0.2 %. The BME280 sits about
+7.5 % below them, and both parts are specified at ±3 %RH, so ±6 % is the worst
+case for the pair. One of them is outside specification.
+
+### Ruling out self-heating
+
+The obvious suspect is the BME280 heating itself. Its humidity compensation uses
+the die temperature, so a die warmer than the air reports humidity low. The
+firmware never calls `setSampling()`, which leaves the Adafruit library default:
+
+```
+MODE_NORMAL, SAMPLING_X16 ×3, FILTER_OFF, STANDBY_MS_0_5
+```
+
+Three 16× oversampled channels take about 113 ms to convert, with 0.5 ms of
+standby between conversions — a duty cycle near 99.6 %, essentially continuous.
+Bosch's recommended weather setting is forced mode, 1× oversampling, one sample
+a minute. That is worth changing on its own account, but it is not this.
+
+The reason it is not this is that the same die temperature is what the part
+reports as temperature, so self-heating has to appear in both readings at once,
+in a fixed ratio. Near 28 °C, saturation vapour pressure moves about 6 % per °C:
+
+| | Needed for 7.5 % RH | Observed |
+| --- | --- | --- |
+| Die above air temperature | ~1.7 °C | +0.2 °C |
+
+Seven times short. Self-heating can account for roughly one percentage point of
+the seven and a half. A hypothesis about a sensor that reads two quantities off
+one die can usually be checked against the other quantity for free, which is
+worth trying before changing any hardware.
+
+### What agreement between two identical parts is worth
+
+Two AM2320s agreeing to 0.2 % is consistency, not correctness — same part, quite
+possibly the same production lot, so a shared bias would be invisible. Nothing
+measured so far says which of 67 % and 74 % is the true one, and replacing the
+odd part out would answer only whether that individual differs from its spare.
+
+Settling it needs a humidity that is known rather than measured. A saturated
+salt solution provides one: undissolved salt keeps the solution at its
+saturation concentration, which fixes the vapour pressure above it, and for
+sodium chloride that is 75.3 %RH — near enough constant from 20 °C to 30 °C, and
+sitting between the two readings in dispute (ASTM E104).
+
+Two things make or break it:
+
+- **Undissolved salt has to remain.** Fully dissolved, the concentration is
+  whatever the recipe was and the humidity goes with it. With solid salt present
+  the excess dissolves or precipitates to hold saturation, which is what makes
+  the figure a constant rather than a recipe.
+- **Keep the board outside the sealed container**, sensor on leads through the
+  seal. A powered board inside a small sealed volume warms one part of it, and a
+  sensor warmer than the solution reads low — the same error the test is meant
+  to measure.
+
+Both parts can go in one container and be read against 75.3 % together. As of
+this commit that has not been done, and the 7.5 % is unexplained.
+
 ## Notes from building it
 
 - **Turn the radio down.** The SuperMini's antenna and regulator do not like
