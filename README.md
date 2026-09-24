@@ -18,7 +18,7 @@ the hardware described below.
 | Part | Notes |
 | --- | --- |
 | ESP32-C3 SuperMini | The board this was built and run on. |
-| BME280 breakout | Temperature, humidity, pressure. I2C, address `0x76`. |
+| BME280 breakout | Temperature, humidity, pressure. I2C, address `0x76`. Needs 4.7 kΩ pull-ups on SDA and SCL unless the breakout carries its own — see [When a sensor lies](#when-a-sensor-lies). |
 | AM2320 (alternative) | Temperature and humidity only. I2C, address `0x5C`, fixed — one per bus. Bare 4-pin parts need 4.7 kΩ pull-ups on SDA and SCL. |
 | TM1637 4-digit 7-segment display | Optional — see below. |
 | 3D-printed enclosure | |
@@ -152,6 +152,65 @@ can tell "this sensor has no barometer" from "the reading failed" — and can te
 for the sensor type with `"pressure" in data`. `rssi` follows the same rule.
 
 The web interface is in Japanese.
+
+## When a sensor lies
+
+A BME280 on marginal I2C pull-ups does not fail. It answers, and the numbers it
+returns look like weather.
+
+Nothing in the part protects against this. The data registers carry no checksum,
+so a corrupted raw value goes through compensation exactly like a good one and
+comes out the other end as a plausible reading. With no external pull-ups the
+bus is held up by the ESP32's internal ones — around 45 kΩ, which into ~100 pF
+of bus capacitance gives a rise time near 4.5 µs against the 1 µs that 100 kHz
+I2C allows. Edges arrive late, bits get sampled wrong, and the library never
+knows.
+
+One unit ran for about a month in this state before anyone noticed, reporting a
+steady indoor 20.3 °C.
+
+### What it looks like
+
+Sampling `/api/data` once a second for a minute, on one unit, before and after
+adding 4.7 kΩ from 3V3 to SDA and to SCL:
+
+| | Distinct readings / 60 | Pressure outside 950–1050 hPa |
+| --- | --- | --- |
+| Internal pull-ups only | 45 | 79 % |
+| External 4.7 kΩ | 14 | 0 % |
+
+The 14 afterwards are the sensor's own noise in the last digit — temperature
+wandering over 27.2–27.4 °C, humidity over 59.7–60.7 % — with pressure identical
+across all 60 samples. The 45 before are corruption.
+
+Two things identify it, and neither is visible in a single reading:
+
+- **One triple repeats.** Here it was 20.3 °C / 80.6 % / 758.6 hPa, returned 14
+  times in that minute and once for 12 hours unbroken. It is what compensation
+  produces from registers that read back as their reset value: a constant, so it
+  recurs exactly.
+- **The bad values fall into clusters,** not a spread. Pressure landed on −63,
+  471.6, 558.0, 758.6 and 1258.4 hPa; temperature on 104.2, 180.6 and 188.5 °C.
+  Random noise would scatter. Discrete clusters mean specific bit positions are
+  flipping, each one displacing the compensated result by a fixed amount.
+
+Restarting does not help, and the distinction matters when diagnosing: a reset
+clears a hung bus, and this bus is not hung. It is transmitting, incorrectly.
+
+### The AM2320 does not do this
+
+Its protocol carries a Modbus CRC, which the library checks, so corruption
+surfaces as a failed read rather than a wrong number — `updateSensorData()`
+keeps the previous value and logs the error code. That is a different failure to
+watch for: the readings stop changing instead of going wrong. Something outside
+the device has to notice. Under Prometheus,
+
+```promql
+stddev_over_time(esp32_temperature_celsius[1h]) == 0
+```
+
+catches a stuck sensor on either part, with no firmware change and without
+needing a barometer to sanity-check.
 
 ## Notes from building it
 
