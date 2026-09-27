@@ -245,7 +245,8 @@ case for the pair. One of them is outside specification.
 
 The obvious suspect is the BME280 heating itself. Its humidity compensation uses
 the die temperature, so a die warmer than the air reports humidity low. The
-firmware never calls `setSampling()`, which leaves the Adafruit library default:
+firmware did not, at the time of this measurement, call `setSampling()`, which
+left the Adafruit library default:
 
 ```
 MODE_NORMAL, SAMPLING_X16 ×3, FILTER_OFF, STANDBY_MS_0_5
@@ -254,7 +255,12 @@ MODE_NORMAL, SAMPLING_X16 ×3, FILTER_OFF, STANDBY_MS_0_5
 Three 16× oversampled channels take about 113 ms to convert, with 0.5 ms of
 standby between conversions — a duty cycle near 99.6 %, essentially continuous.
 Bosch's recommended weather setting is forced mode, 1× oversampling, one sample
-a minute. That is worth changing on its own account, but it is not this.
+a minute. That has since been changed on its own account: the firmware now asks
+for forced mode with 1× on all three channels and takes each reading with
+`takeForcedMeasurement()`, which brings the duty cycle from 99.6 % to about
+0.3 %. The indoor unit has not been reflashed yet, so the figures in this section
+are still the ones the old settings produced. The change is not the explanation
+for the 7.5 %.
 
 The reason it is not this is that the same die temperature is what the part
 reports as temperature, so self-heating has to appear in both readings at once,
@@ -332,6 +338,34 @@ instant of power-up leaves it in single-bus mode, described under the building
 notes below. The two cannot be told apart until the part is clean, dry and
 repowered, so nothing should be concluded about the sensor before then — and the
 7.5 %RH question the test was meant to settle is still open.
+
+### Reporting that nothing was read
+
+Four hours of `0.0 °C` reached the database as though it were weather, which is a
+firmware problem rather than a sensor one: `/api/data` reported a number and said
+nothing about whether that number had come from a sensor. It now reports both.
+
+- **A measurement that does not exist is not published.** Until a read has
+  succeeded, `temperature` and `humidity` are left out of the JSON entirely, the
+  same way `pressure` and `rssi` are omitted where they have no meaning. A unit
+  that breaks later keeps publishing its last good reading, which is the honest
+  thing to do with it, but nothing invents a value that was never measured.
+- **Health is published unconditionally**, as `sensor_ok`, `read_errors` and
+  `last_read_age_s`, and that is what makes the omission safe. Dropping a key on
+  its own would only move the failure from a wrong number to a missing series:
+  the exporter turns a missing key into a missing metric and still answers `200`,
+  so the scrape succeeds, `up` stays `1`, and the series quietly goes stale — the
+  same silence the pull-up fault hid behind for a month. That was measured on the
+  exporter actually in use rather than assumed, along with the fact that it
+  converts `true` and `false` to `1` and `0`, so the flag needs no numeric twin.
+- The web page shows `—` rather than `0.0` before the first successful read, and
+  says how many reads have failed. Someone standing in front of the unit should
+  not have to know that zero means broken.
+
+`last_read_age_s` is what separates the two ways of being mute: an age that
+tracks uptime means nothing has ever been read, while an age shorter than uptime
+means it worked and then stopped. That is the distinction this cost a day to
+learn.
 
 ## Notes from building it
 

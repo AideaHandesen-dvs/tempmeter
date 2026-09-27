@@ -90,9 +90,34 @@ String scannedSSIDs = "";
 // DHCP でアドレスが変わっても追えるように、IP とは別に持つ。
 String deviceId = "";
 
+// センサの健全性。測定値とは別に持つ。2026-09-27、排気側のセンサを塩水で濡らした時に
+// ファームは 0.0℃/0.0%RH を4時間ぶん「測定値」として配り続けた。読めていないことは
+// 値の形（0 かどうか）から推測させるのではなく、独立したフラグで出す。
+bool sensorOk = false;            // 直近の読み取りが成功したか
+bool sensorEverRead = false;      // ブート後に一度でも成功したか
+uint32_t sensorReadErrors = 0;    // 失敗の累計。間欠的な化けはここに出る
+unsigned long lastGoodReadMs = 0; // 直近で成功した時刻
+
+// 直近の成功読みからの経過秒。一度も成功していなければブートからの経過を返す
+// （その場合 currentTemp 等は初期値のままで、測定値としての意味を持たない）。
+uint32_t sensorAgeSeconds() {
+    unsigned long since = sensorEverRead ? (millis() - lastGoodReadMs) : millis();
+    return (uint32_t)(since / 1000UL);
+}
+
 bool sensorBegin() {
 #if SENSOR_TYPE == SENSOR_BME280
-    return sensor.begin(BME280_ADDR, &Wire);
+    if (!sensor.begin(BME280_ADDR, &Wire)) return false;
+    // Adafruit の既定は MODE_NORMAL / 全ch ×16 / standby 0.5ms で、デューティが
+    // 99.6% になる。ダイが自分の熱で温まり、その温度で湿度を補正するため湿度が
+    // 低めに出る。Bosch の weather monitoring 推奨（forced / ×1 / フィルタ無し）に
+    // 合わせる。3 秒間隔で forced なら 1 回 ~10ms、デューティは 0.3% に落ちる。
+    sensor.setSampling(Adafruit_BME280::MODE_FORCED,
+                       Adafruit_BME280::SAMPLING_X1,   // 温度
+                       Adafruit_BME280::SAMPLING_X1,   // 気圧
+                       Adafruit_BME280::SAMPLING_X1,   // 湿度
+                       Adafruit_BME280::FILTER_OFF);
+    return true;
 #else
     return sensor.begin();
 #endif
@@ -101,21 +126,51 @@ bool sensorBegin() {
 // センサを実際に叩くのはここだけ。呼び出すのは loop() だけで、
 // HTTP の処理からは呼ばない（AM2320 の 2.0 秒規則を外から破られないため）。
 void updateSensorData() {
+    bool ok;
 #if SENSOR_TYPE == SENSOR_BME280
-    currentTemp = sensor.readTemperature();
-    currentHumidity = sensor.readHumidity();
-    currentPressure = sensor.readPressure() / 100.0F;
+    // forced モードでは測りたい時に自分で起こす。これを呼ばないと値が更新されない。
+    ok = sensor.takeForcedMeasurement();
+    if (ok) {
+        float t = sensor.readTemperature();
+        float h = sensor.readHumidity();
+        float pr = sensor.readPressure() / 100.0F;
+        // データレジスタに CRC が無いので化けはここでは捕まらない（百葉箱が1ヶ月
+        // もっともらしい嘘を出し続けたのはこれ）。応答が無い場合だけ NAN で出る。
+        ok = !isnan(t) && !isnan(h) && !isnan(pr);
+        if (ok) {
+            currentTemp = t;
+            currentHumidity = h;
+            currentPressure = pr;
+        }
+    }
+    if (!ok) Serial.println("BME280 read failed");
 #else
     // 起こす作法と 2.0 秒の下限はライブラリ側が持っている。
-    // 早すぎた場合は直近の成功値がそのまま残る。
     int rv = sensor.read();
-    if (rv == AM232X_OK || rv == AM232X_READ_TOO_FAST) {
+    // 呼ぶのが早すぎただけ。新しい値は無いが故障でもないので、何も動かさない
+    // （成功にも失敗にも数えない。でないと失敗数と経過秒の意味が濁る）。
+    if (rv == AM232X_READ_TOO_FAST) return;
+    ok = (rv == AM232X_OK);
+    if (ok) {
         currentTemp = sensor.getTemperature();
         currentHumidity = sensor.getHumidity();
     } else {
         Serial.println("AM2320 read error: " + String(rv));
     }
 #endif
+    sensorOk = ok;
+    if (ok) {
+        sensorEverRead = true;
+        lastGoodReadMs = millis();
+    } else if (sensorReadErrors < UINT32_MAX) {
+        sensorReadErrors++;
+    }
+}
+
+// 人が見る画面にも 0.0 を測定値として出さない。「測っていない」と「0℃」は別物。
+String sensorValueText(float v, int digits, const char *suffix) {
+    if (!sensorEverRead) return String("—");
+    return String(v, digits) + suffix;
 }
 
 #if USE_DISPLAY
@@ -199,6 +254,7 @@ String makeHTML() {
     s += ".btn-danger{background:linear-gradient(135deg,#e74c3c 0%,#c0392b 100%); color:white; box-shadow:0 4px 15px rgba(231,76,60,0.4); margin-top:10px;}";
     s += ".status{background:#e8f5e9; border-radius:10px; padding:15px; margin-bottom:20px;}";
     s += ".status.disconnected{background:#ffebee;}";
+    s += ".sensor-warn{background:#ffebee; color:#c0392b; border-radius:10px; padding:12px; margin-top:15px; font-size:0.85em; font-weight:bold;}";
     s += ".status-label{font-size:0.85em; color:#666;}";
     s += ".status-value{font-weight:bold; color:#333;}";
     s += ".manual-input{display:none; margin-top:10px;}";
@@ -209,12 +265,18 @@ String makeHTML() {
     s += "<div class='card'>";
     s += "<h1>🌡️ ESP32-C3 Sensor</h1>";
     s += "<div class='sensor-grid'>";
-    s += "<div class='sensor-item temp'><div class='sensor-value'>" + String(currentTemp, 1) + "°</div><div class='sensor-label'>温度 (℃)</div></div>";
-    s += "<div class='sensor-item humid'><div class='sensor-value'>" + String(currentHumidity, 1) + "%</div><div class='sensor-label'>湿度</div></div>";
+    s += "<div class='sensor-item temp'><div class='sensor-value'>" + sensorValueText(currentTemp, 1, "°") + "</div><div class='sensor-label'>温度 (℃)</div></div>";
+    s += "<div class='sensor-item humid'><div class='sensor-value'>" + sensorValueText(currentHumidity, 1, "%") + "</div><div class='sensor-label'>湿度</div></div>";
 #if SENSOR_HAS_PRESSURE
-    s += "<div class='sensor-item press'><div class='sensor-value'>" + String(currentPressure, 0) + "</div><div class='sensor-label'>気圧 (hPa)</div></div>";
+    s += "<div class='sensor-item press'><div class='sensor-value'>" + sensorValueText(currentPressure, 0, "") + "</div><div class='sensor-label'>気圧 (hPa)</div></div>";
 #endif
-    s += "</div></div>";
+    s += "</div>";
+    if (!sensorOk) {
+        s += "<div class='sensor-warn'>⚠ " SENSOR_NAME " を読めていません（失敗 " + String(sensorReadErrors);
+        s += " 回 / 直近の成功から " + String(sensorAgeSeconds()) + " 秒";
+        s += sensorEverRead ? "）</div>" : "・起動後まだ一度も成功していません）</div>";
+    }
+    s += "</div>";
 
     s += "<div class='card'>";
     if (WiFi.status() == WL_CONNECTED) {
@@ -452,10 +514,22 @@ void setup() {
     server.on("/api/data", HTTP_GET, []() {
         bool up = (WiFi.status() == WL_CONNECTED);
         String json = "{\"id\":\"" + deviceId + "\"";
-        json += ",\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1);
+        // 一度も読めていないうちは temperature/humidity を出さない。初期値の 0.0 を
+        // 測定値として配ると下流には区別がつかない。json_exporter はキーが無ければ
+        // そのメトリクスを出さないだけでスクレイプは 200 で成功するので、消えた穴は
+        // 下の sensor_ok が埋める（実測で確認済み）。rssi/pressure と同じ流儀。
+        if (sensorEverRead) {
+            json += ",\"temperature\":" + String(currentTemp, 1) + ",\"humidity\":" + String(currentHumidity, 1);
 #if SENSOR_HAS_PRESSURE
-        json += ",\"pressure\":" + String(currentPressure, 1);
+            json += ",\"pressure\":" + String(currentPressure, 1);
 #endif
+        }
+        // 健全性は値と独立に、必ず出す。値が消えても原因はここに残る。
+        // json_exporter は true/false を 1/0 に変換する（実測で確認済み）。
+        json += ",\"sensor\":\"" SENSOR_NAME "\"";
+        json += ",\"sensor_ok\":" + String(sensorOk ? "true" : "false");
+        json += ",\"read_errors\":" + String(sensorReadErrors);
+        json += ",\"last_read_age_s\":" + String(sensorAgeSeconds());
         json += ",\"wifi_connected\":" + String(up ? "true" : "false");
         // 電波強度は繋がっている時だけ。AP モードでは意味を持たないので、
         // pressure と同じ流儀でキーごと出さない（null は返さない）。
