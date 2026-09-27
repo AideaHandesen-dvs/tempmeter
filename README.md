@@ -282,7 +282,7 @@ saturation concentration, which fixes the vapour pressure above it, and for
 sodium chloride that is 75.3 %RH — near enough constant from 20 °C to 30 °C, and
 sitting between the two readings in dispute (ASTM E104).
 
-Two things make or break it:
+Three things make or break it:
 
 - **Undissolved salt has to remain.** Fully dissolved, the concentration is
   whatever the recipe was and the humidity goes with it. With solid salt present
@@ -292,9 +292,46 @@ Two things make or break it:
   seal. A powered board inside a small sealed volume warms one part of it, and a
   sensor warmer than the solution reads low — the same error the test is meant
   to measure.
+- **The sensor hangs in the air above the solution and never touches it.** What
+  the figure describes is the vapour pressure over the liquid, so the part
+  belongs in the headspace, taped to the lid or suspended from it. A sensor in
+  the liquid is not reading a known humidity; it is a wet sensor.
 
-Both parts can go in one container and be read against 75.3 % together. As of
-this commit that has not been done, and the 7.5 % is unexplained.
+Both parts can go in one container and be read against 75.3 % together.
+
+### The first attempt wet the sensor
+
+On 2026-09-27 the exhaust unit's AM2320 went into the solution itself, and it has
+read a flat 0.0 °C / 0.0 %RH since. The firmware says how complete that failure
+is. A failed read leaves the previous value in place (`updateSensorData()`), so a
+sensor that stops answering part way through a day freezes at whatever it last
+said; zero is the variable's initial value, which means no read has succeeded
+since the unit booted. The bus never came up at all, rather than coming up and
+lying — a different failure from the pull-up trouble described earlier, and one
+that is distinguishable from it without opening anything, by whether the stuck
+value is zero or plausible.
+
+Salt water is an electrolyte, so the damage is not only a matter of getting the
+part dry again:
+
+- **Cut the power before anything else.** A wetted board still energised is
+  electrolysis across whatever the liquid bridges, and metal migration between
+  the electrodes follows within minutes. How much survives is decided by how long
+  it stayed powered, not by how long it stayed wet.
+- **Rinse with distilled water rather than only drying it.** Sodium chloride
+  deliquesces at 75 %RH — the same property that makes the reference work — so
+  salt left on the polymer film draws water out of the air whenever the room
+  passes that humidity, and the reading never recovers. Drying a salted film
+  preserves the fault instead of clearing it.
+- **Dry below 50 °C, over hours.** A heat gun and an ultrasonic cleaner each
+  destroy the capacitive film that does the measuring, one thermally and one
+  mechanically.
+
+A mute AM2320 has a second and harmless explanation as well: SCL low at the
+instant of power-up leaves it in single-bus mode, described under the building
+notes below. The two cannot be told apart until the part is clean, dry and
+repowered, so nothing should be concluded about the sensor before then — and the
+7.5 %RH question the test was meant to settle is still open.
 
 ## Notes from building it
 
