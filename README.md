@@ -324,11 +324,12 @@ part dry again:
   electrolysis across whatever the liquid bridges, and metal migration between
   the electrodes follows within minutes. How much survives is decided by how long
   it stayed powered, not by how long it stayed wet.
-- **Rinse with distilled water rather than only drying it.** Sodium chloride
-  deliquesces at 75 %RH — the same property that makes the reference work — so
-  salt left on the polymer film draws water out of the air whenever the room
-  passes that humidity, and the reading never recovers. Drying a salted film
-  preserves the fault instead of clearing it.
+- **Get the salt out with water, which is not the same as drying the part.**
+  Sodium chloride deliquesces at 75 %RH — the same property that makes the
+  reference work — so salt left on the polymer film draws water out of the air
+  whenever the room passes that humidity, and the reading never recovers. Drying
+  a salted film preserves the fault instead of clearing it. How to get it out of
+  a part with no opening to flush is its own problem, below.
 - **Dry below 50 °C, over hours.** A heat gun and an ultrasonic cleaner each
   destroy the capacitive film that does the measuring, one thermally and one
   mechanically.
@@ -338,6 +339,89 @@ instant of power-up leaves it in single-bus mode, described under the building
 notes below. The two cannot be told apart until the part is clean, dry and
 repowered, so nothing should be concluded about the sensor before then — and the
 7.5 %RH question the test was meant to settle is still open.
+
+### Getting salt out of a part that cannot be flushed
+
+The AM2320's film sits behind a grille in a closed housing. There is nothing to
+wipe and nowhere to direct a jet of water, and by the time anyone notices, the
+solution is already inside. Rinsing the outside of it moves none of what matters.
+
+What works instead is dilution: put the whole part in fresh water and change the
+water. This is the reasoning behind keeping sea-recovered electronics submerged in
+fresh water until they can be cleaned properly rather than drying them on the way
+— salt crystallising somewhere unreachable is a worse state than salt still in
+solution, and chloride corrosion continues either way.
+
+The arithmetic says how few changes are needed. The part carries perhaps 0.1 to
+0.3 mL of saturated brine, at roughly 190 g/L of chloride. Diluted into a litre
+that is about 0.06 g/L, already within a few times the 0.02 g/L that tap water
+starts at, and the second change puts the interior at the background.
+
+| | Chloride |
+| --- | --- |
+| Saturated brine | ~190 g/L |
+| Tap water | ~0.02 g/L |
+
+So **tap water is sufficient** and distilled water is a refinement rather than a
+requirement — worth using for a last rinse if it is to hand, never worth waiting
+for. What tap water leaves behind is calcium and magnesium, and those do not
+deliquesce; deliquescence is the entire failure mode being cleared.
+
+**Alcohol cannot stand in for the water.** Sodium chloride dissolves 36 g/100 mL
+in water and about 0.03 in isopropanol, a thousandfold less, so it cannot do the
+one job that needs doing. It has a real use as a water-displacing final rinse on
+an ordinary board, but a humidity sensor is the one part where the polymer
+absorbs solvent and drifts afterwards, and the only gain on offer is drying
+faster.
+
+**Stirring the bath is close to free but is not the variable.** Agitation steepens
+the gradient at the mouth of the vent, which helps a little; the rate-limiting
+step is diffusion inside the housing, which no amount of stirring reaches. Thirty
+minutes per change is the useful setting. Once the chloride is gone, leaving the
+part soaking overnight costs nothing and shortens the whole job, because drying
+cannot be hurried and a part left half-dry is the single state to avoid.
+
+Drying then wants 30 to 50 °C and the grille in open air rather than face-down on
+the warm surface. Gravity takes the first part of the water when the part is
+shaken pins-down; the rest has to evaporate and leave through that same opening,
+so covering it closes the exit. Desiccant alongside helps and is not necessary.
+No power for 24 hours.
+
+### What the timestamps settled, and what they could not
+
+The monitoring turned out to record the repair as well as the fault. Transitions
+of `up` for the unit are hard timestamps for the power being cut and restored,
+which is how this table was reconstructed after the fact:
+
+| 2026-09-27 | |
+| --- | --- |
+| 12:30:30 | last plausible reading, 23.2 °C |
+| 12:30:45 | `up` 1 → 0; unit unplugged and taken to the bench |
+| 16:53:00 | `up` 0 → 1 with temperature 0; **no read has succeeded since** |
+| ~21:34 | the sensor is reported to have just gone into the solution |
+| 21:37:15 | `up` 1 → 0; power cut |
+
+One caution on reading that record: a 15 s gap in `up` at 20:11 is a restart of
+json_exporter, not a fault. A record needs its own artefacts labelled, or the
+next person reads a hole as evidence.
+
+The number that decides whether the part survives is how long it was wet **and
+powered**, and the record bounds it between about two minutes and four and
+three-quarter hours without narrowing it further. Nothing in the data can: once
+the published value is zero, getting the sensor wet changes nothing about it, so
+a part that was dry and in single-bus mode looks exactly like a part that was
+drowned and silent.
+
+The bound is that wide because the report was relative — "just now" — while the
+failure had already been visible for hours, and the absolute times had to be
+recovered afterwards from `up` transitions and commit timestamps. Reports of
+physical work are worth stamping when they arrive.
+
+Two things remain open, and drying decides both. If `/api/data` comes back with a
+number at all, the silence was single-bus mode and the part was never harmed. If
+it does, reading it against the 75.3 % reference — sensor in the headspace this
+time — says whether the film survived, and answers the 7.5 %RH disagreement that
+started all of this.
 
 ### Reporting that nothing was read
 
