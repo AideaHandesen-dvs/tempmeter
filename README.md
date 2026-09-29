@@ -417,11 +417,52 @@ failure had already been visible for hours, and the absolute times had to be
 recovered afterwards from `up` transitions and commit timestamps. Reports of
 physical work are worth stamping when they arrive.
 
-Two things remain open, and drying decides both. If `/api/data` comes back with a
-number at all, the silence was single-bus mode and the part was never harmed. If
-it does, reading it against the 75.3 % reference — sensor in the headspace this
-time — says whether the film survived, and answers the 7.5 %RH disagreement that
-started all of this.
+### The verdict: the film, not the bus
+
+Powered up after a day of drying, the part answered — so the bus was never the
+problem, and the silence had been single-bus mode or something equally harmless.
+It came up sitting beside the surviving AM2320, which makes the readings a
+same-air comparison against a baseline these two parts set before the accident:
+on 2026-09-24, co-located, they agreed to 0.2 %RH and 0.3-0.5 °C.
+
+| | Before, same air | After |
+| --- | --- | --- |
+| Temperature | 0.3-0.5 °C apart | **+0.20 °C, steady** |
+| Humidity | within 0.2 % | **+21.7 points, ×1.315, steady** |
+
+The temperature element is intact and the polymer film reads about 1.3× high.
+Those are separate parts inside one package — the film measures humidity, a
+separate element measures temperature — so ionic residue in the film leaves the
+thermometer alone. The rinse recovered a thermometer. It did not recover a
+hygrometer, and whether a longer soak would have leached the film is untested.
+
+Three things in the diagnosis were wrong in ways worth keeping:
+
+- **A proportional humidity error produces a constant computed dew point.** Since
+  `e = RH × es(T)`, scaling RH scales the vapour pressure, so a part reading 1.3×
+  high in air of steady absolute humidity reports a steady dew point. Dew-point
+  constancy was read here as evidence the film was tracking physics correctly. It
+  is the signature of the error, not a clearance.
+- **Deliquescence and contamination are different mechanisms.** A saturated salt
+  solution holds the air above it at 75.3 %RH and cannot exceed it, which was used
+  to rule salt out at 90 %. Ionic residue *inside* the polymer is the other
+  mechanism: it raises water uptake at any humidity, with no ceiling, and it is
+  what the ×1.3 looks like.
+- **Residual water could not have supplied it.** Fick's law over the grille puts
+  0.13 to 1.06 mL through it in the 24 drying hours, for opening areas of 5 to
+  40 mm²; the housing holds at most 0.2 to 0.4 mL. Even full, it empties. A
+  reading blamed on trapped water needs a reservoir the part does not have.
+
+One practical note: the first reading after moving a part off a warm surface is a
+cooling transient, not its steady state. Ten minutes before the numbers above
+settled, the same pair differed by +2.9 °C and ×1.05 — which would have read as a
+healthy part.
+
+The unit goes back into service as the exhaust sensor regardless. Every alert that
+matters in the closet is built on temperature, and exhaust humidity feeds none of
+them, so it returns with its humidity channel marked untrusted. What it can no
+longer do is take part in the 7.5 %RH argument that started this, which now needs
+the other AM2320.
 
 ### Reporting that nothing was read
 
