@@ -288,7 +288,32 @@ saturation concentration, which fixes the vapour pressure above it, and for
 sodium chloride that is 75.3 %RH — near enough constant from 20 °C to 30 °C, and
 sitting between the two readings in dispute (ASTM E104).
 
-Three things make or break it:
+The reference is only as good as the temperature uniformity around it, and that
+turns out to be the hard part rather than the chemistry. Since the reading scales
+as `es(T_solution)/es(T_sensor)`, a sensor warmer than the solution reads low at
+about 4.3 points per °C near 25 °C:
+
+| Sensor above solution | Reads | Error |
+| --- | --- | --- |
+| 0.2 °C | 74.4 % | -0.9 pt |
+| 0.5 °C | 73.1 % | -2.2 pt |
+| 1.0 °C | 71.0 % | -4.3 pt |
+| 2.0 °C | 66.9 % | -8.4 pt |
+
+Two degrees manufactures 8.4 points, which is larger than the 7.5 the test exists
+to settle. The same arithmetic runs the other way through a cold spot: any surface
+colder than the solution condenses water, and then the chamber's vapour pressure
+is set by that surface rather than by the salt.
+
+How much uniformity is needed comes from the decision, not from the instrument.
+The reading in dispute feeds one threshold — 70 %RH on the closet intake, against
+a 58 % baseline — so what has to be resolved is which of 67 % and 74 % is right, a
+7.5 point question. At ±2 pt the answer is unambiguous, since 73-77 % counts as
+agreement with the reference while 67 % is eight points outside it, and ±2 pt
+allows 0.45 °C. That is twice the tolerance a ±1 pt answer would need, and nothing
+here requires ±1 pt.
+
+Four things make or break it:
 
 - **Undissolved salt has to remain.** Fully dissolved, the concentration is
   whatever the recipe was and the humidity goes with it. With solid salt present
@@ -302,8 +327,36 @@ Three things make or break it:
   the figure describes is the vapour pressure over the liquid, so the part
   belongs in the headspace, taped to the lid or suspended from it. A sensor in
   the liquid is not reading a known humidity; it is a wet sensor.
+- **Engineer the gradient away rather than trying to detect it.** A rigid jar
+  standing in a bucket of room-temperature water, the whole bucket wrapped, holds
+  the chamber isothermal by thermal mass and conduction. A thin bag in open air
+  does the opposite: no thermal mass, every draught arriving separately at
+  different parts of it, and the lead penetration doubling as a heat path from the
+  powered board outside. Seal the leads through a hole rather than clamping them
+  in a closure, and coil a length of them inside the insulation so they reach
+  ambient before they reach the sensor. A slow leak matters far less than a
+  gradient, since the salt keeps regenerating the humidity.
 
 Both parts can go in one container and be read against 75.3 % together.
+
+Two acceptance checks are worth more than trusting the setup, but only the ones
+these parts can actually perform. **Drift is measurable**: it is one sensor
+against itself over time, so its calibration offset cancels and the 0.1 °C
+resolution is what counts — require under 0.1 °C per hour, and a humidity reading
+steady for two hours. **Agreement between two sensors is not measurable at this
+scale**: with ±0.5 °C on the AM2320 and ±0.5 to 1.0 °C on the BME280, two parts at
+one temperature can differ by more than the 0.45 °C being looked for, so "the two
+thermometers agree" cannot certify uniformity. What can be used instead is the
+*change* in their difference from a value measured beforehand in well-mixed air,
+since the offsets are stable — co-located, this pair sat at +0.20 °C all
+afternoon. Better still is the water bath, which removes the need to detect
+anything.
+
+One ordering note. The BME280 has to be running in forced mode before it goes in,
+not after. Its library default keeps the die at a 99.6 % duty cycle, and inside a
+small sealed volume with no convection that heat has nowhere to go — a sensor
+warmer than the solution reads low at 4.3 points per °C, which is the very error
+under test. Left as it is, the instrument writes its own answer.
 
 ### The first attempt wet the sensor
 
