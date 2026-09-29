@@ -96,6 +96,7 @@ String deviceId = "";
 bool sensorOk = false;            // 直近の読み取りが成功したか
 bool sensorEverRead = false;      // ブート後に一度でも成功したか
 uint32_t sensorReadErrors = 0;    // 失敗の累計。間欠的な化けはここに出る
+int sensorLastRv = 0;             // 直近の読み取り戻り値。応答なしと化けを区別する
 unsigned long lastGoodReadMs = 0; // 直近で成功した時刻
 
 // 直近の成功読みからの経過秒。一度も成功していなければブートからの経過を返す
@@ -103,6 +104,42 @@ unsigned long lastGoodReadMs = 0; // 直近で成功した時刻
 uint32_t sensorAgeSeconds() {
     unsigned long since = sensorEverRead ? (millis() - lastGoodReadMs) : millis();
     return (uint32_t)(since / 1000UL);
+}
+
+// 起動時に I2C バスが掴まれていたか。ハングは電源を切るまで直らない故障に見えるので、
+// 遠くから原因を切り分けられるよう外に出す。
+bool i2cWasHung = false;
+
+// I2C バスのハング解除。ESP32 が転送の途中でリセットされると、スレーブは自分の番の
+// ビットを出し切るまで SDA を low に握ったまま残る。マスタ側は以後すべての読みに失敗し、
+// センサが壊れたように見える。SCL を 9 回叩いて残りを吐かせ、STOP を作って解放する。
+// 2026-09-29、USB で焼き直した直後に排気側がこの状態になった（read_errors が 3 秒ごとに
+// 増え、一度も成功しない）。焼けば毎回踏むので、起動時に無条件で通す。
+bool i2cBusRecover() {
+    pinMode(I2C_SCL, OUTPUT_OPEN_DRAIN);
+    digitalWrite(I2C_SCL, HIGH);
+    pinMode(I2C_SDA, INPUT_PULLUP);
+    delayMicroseconds(10);
+    if (digitalRead(I2C_SDA) != LOW) {   // 掴まれていない。何もしない
+        pinMode(I2C_SCL, INPUT);
+        return false;
+    }
+    // 残りのビットを吐かせる。9 回でバイト境界に必ず戻る。
+    for (int i = 0; i < 9 && digitalRead(I2C_SDA) == LOW; i++) {
+        digitalWrite(I2C_SCL, LOW);
+        delayMicroseconds(10);
+        digitalWrite(I2C_SCL, HIGH);
+        delayMicroseconds(10);
+    }
+    // STOP を作る。SCL を high に保ったまま SDA を low→high。
+    pinMode(I2C_SDA, OUTPUT_OPEN_DRAIN);
+    digitalWrite(I2C_SDA, LOW);
+    delayMicroseconds(10);
+    digitalWrite(I2C_SDA, HIGH);
+    delayMicroseconds(10);
+    pinMode(I2C_SDA, INPUT);
+    pinMode(I2C_SCL, INPUT);
+    return true;
 }
 
 bool sensorBegin() {
@@ -150,6 +187,7 @@ void updateSensorData() {
     // 呼ぶのが早すぎただけ。新しい値は無いが故障でもないので、何も動かさない
     // （成功にも失敗にも数えない。でないと失敗数と経過秒の意味が濁る）。
     if (rv == AM232X_READ_TOO_FAST) return;
+    sensorLastRv = rv;
     ok = (rv == AM232X_OK);
     if (ok) {
         currentTemp = sensor.getTemperature();
@@ -420,6 +458,10 @@ void setup() {
     display.showNumberDec(8888);
 #endif
 
+    // Wire より先に。バスが掴まれた状態で begin しても解けない。
+    i2cWasHung = i2cBusRecover();
+    if (i2cWasHung) Serial.println("I2C bus was hung at boot; recovered");
+
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(I2C_CLOCK_HZ);
     if (!sensorBegin()) {
@@ -530,6 +572,10 @@ void setup() {
         json += ",\"sensor_ok\":" + String(sensorOk ? "true" : "false");
         json += ",\"read_errors\":" + String(sensorReadErrors);
         json += ",\"last_read_age_s\":" + String(sensorAgeSeconds());
+        // 起動時にバスが掴まれていたか。読めない原因がバスかセンサかを遠くから分ける。
+        json += ",\"i2c_hung_at_boot\":" + String(i2cWasHung ? "true" : "false");
+        // 直近の戻り値。応答なし(接続失敗)と CRC 不一致は原因も対処も違う。
+        json += ",\"last_rv\":" + String(sensorLastRv);
         json += ",\"wifi_connected\":" + String(up ? "true" : "false");
         // 電波強度は繋がっている時だけ。AP モードでは意味を持たないので、
         // pressure と同じ流儀でキーごと出さない（null は返さない）。
