@@ -707,7 +707,10 @@ BME280 is no longer the odd part out.
 
 The reading above is what today's hardware says, and it stands on its own: three
 co-located parts, the BME280 verified sample-by-sample first, agreeing inside
-±2.6 % in vapour pressure. The residual is not small — the two new parts, at a
+±2.6 % in vapour pressure. It stands on one assumption that is examined
+[further down](#the-14-c-that-has-not-been-assigned-to-anything) and does not
+hold up — that the temperature each part reports is the temperature of the air it
+shares with the other two. The residual is not small — the two new parts, at a
 temperature difference of exactly 0.00 °C, are 3.9 % apart in `e`, about 2.5 points
 of RH, just outside the ±2 points the 70 % closet-humidity threshold was
 calculated to need. Matching the lot delivered the temperature channel and not the
@@ -885,18 +888,93 @@ alone the reported vapour pressure is invariant: the film reads the RH at the
 die's temperature, the part reports that same temperature, and `e = RH × es(T)`
 hands back the air's true value whatever the die is doing. Removing 0.334 °C
 should therefore have lifted RH by 1.13 points and left `e` where it was. RH rose
-0.44 points and `e` moved 1.27 %. Either something that is not a temperature
-changed, or the control is not good enough — the two units sit 1.4 °C apart and
-so are not in one body of air, and 1.27 % of drift between two spots in a room
-over twenty-five minutes is unremarkable. Nothing here separates those, and
-separating them wants both parts in a single volume of air, which is the salt jar
-built for a different question.
+0.44 points and `e` moved 1.27 %.
+
+That was first written up as unresolved, with the control blamed: the two units
+read 1.4 °C apart, so perhaps they are not in one body of air and 1.27 % of drift
+between two spots in a room is unremarkable. **The excuse does not survive, for
+two reasons.**
+
+The first is that all three units are sitting in one place on the bench, which is
+a fact about where they are and not something to be inferred from what they
+report. Reading a temperature difference as evidence of separate air, when that
+difference is the instrument disagreement under investigation, is circular.
+
+The second is that there is a null control in the same recording, and it was not
+used. The two AM2320s went through the reflash untouched, in the same air, and
+their difference says how much a pair of parts wanders across this boundary:
+
+| Across the 20:00 boundary | ΔT (°C) | ΔRH (points) | Δe (%) |
+| --- | --- | --- | --- |
+| Exhaust − intake, before | +0.019 (sd 0.040) | +2.441 (sd 0.050) | +3.952 (sd 0.275) |
+| Exhaust − intake, after | −0.038 (sd 0.049) | +2.605 (sd 0.057) | +3.882 (sd 0.310) |
+| **Step** | **−0.057** | **+0.164** | **−0.070** |
+| Indoor − intake, step | −0.295 | +0.402 | **−1.073** |
+| Indoor − exhaust, step | −0.238 | +0.237 | **−0.967** |
+
+Windows are 19:52–20:00 (n=32) and 20:01–20:30 (n=117); the 19:36–19:52
+excursion, where a hand near the indoor unit put it 2.6 °C above the pair and its
+`e` up 15 %, is excluded. **Two parts in the same air held `e` to 0.07 % while the
+BME280 moved a full percent against either of them.** Drift between spots is not
+what this is.
+
+**And the step is not a contradiction either — it measures something.** The
+invariance argument assumes the film and the thermometer are at one temperature.
+They need not be. Take the two limits, at 5.86 %/°C and 58 %RH:
+
+| If the film's temperature | RH should step | `e` should step |
+| --- | --- | --- |
+| follows the die exactly | +1.00 point | 0 % |
+| stays at the air's value | 0 points | −1.73 % |
+
+The observation sits between them, and both channels put it in the same place.
+Against the intake unit, RH gives 0.40 of the way and `e` gives 0.38; against the
+exhaust unit, 0.29 and 0.31. **The film followed about a third of the die's
+excursion.** Self-heating at the thermometer was 0.30 °C and at the film about
+0.11 °C, which is the ordinary result that the thermometer sits closer to the heat
+than the film does. No unknown fault in the humidity channel is needed, and the
+salt jar is not what this question wanted.
 
 One cost is visible and was expected. Dropping oversampling from 16× to 1× put
 the noise up: over ten-minute windows the pressure standard deviation went from
 0.000 to 0.048 hPa and the temperature's from 0.018 to 0.048 °C. That is what the
 duty cycle was bought with. It also happens to help `TempmeterStuck`, which fires
 on a standard deviation of exactly zero.
+
+### The 1.4 °C that has not been assigned to anything
+
+The same recording contains a larger number than any of the above, and it had
+been read as a property of the room. After the reflash the BME280 carries no
+meaningful self-heating — 0.3 % duty cycle — and it still reads **1.405 °C above
+two AM2320s standing in the same place**. Subtracting the measured self-heating
+from the 1.4 °C is wrong and was done here once: the 0.295 °C is already gone from
+the post-reflash figure, and 1.405 °C is what is left after it.
+
+So the instrument disagreement in temperature is **4.8 times the self-heating that
+was measured so carefully**, and unlike the self-heating it is not attributed to
+anything.
+
+It does not stay in the temperature channel. `e = RH × es(T)` puts `es` at
+5.86 %/°C near 27 °C, so 1.405 °C is **8.2 % of vapour pressure** — twice the
+spread the three-unit comparison was declared to agree within:
+
+| Rests on | Claim | At stake |
+| --- | --- | --- |
+| [Three co-located parts agree within ±2.6 % in `e`](#the-answer-from-two-new-parts) | the BME280 falls between the two AM2320s | 8.2 % |
+| `ServerClosetHumid` at 70 % | the intake unit's RH is good to ±2 points | — |
+
+Correct the BME280 downward by 1.405 °C and its `e` drops 8.2 %, out from between
+the two AM2320s and below both. Correct the AM2320s upward instead and theirs
+rises by as much. **Three parts in one place fix the differences and not the
+errors**, and two of the three came out of one batch, so a bias they share is not
+observable here at all.
+
+That is the same shape of conclusion the salt jar reached, one channel over: what
+is missing is an absolute anchor, and a second identical part cannot be one. For
+humidity that anchor is a saturated salt solution. For temperature it is easier
+than that — an ice bath is 0.00 °C, holds it while ice remains, and needs crushed
+ice and water. Until one of the three is tied to a fixed point, the 1.405 °C is
+unsplit and every `e` comparison across the two sensor types carries it.
 
 ### Tapping a contact proves one direction only
 
