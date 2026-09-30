@@ -108,7 +108,10 @@ to get it wrong is to mistype `-e`, and `-e` is on the screen.
 | `closet` | AM2320 | closet exhaust | `10:00:3B:CC:A9:4C` | 192.168.1.112 |
 | `indoor` | BME280 | indoor | `08:92:72:91:5D:9C` | 192.168.1.156 |
 
-`default_envs = closet`, because two of the three are that.
+`default_envs = closet`, because two of the three are that. **`intake` and
+`exhaust` are the role labels the two closet units are scraped under, not two
+positions** — they stand in the same place, which
+[matters to one alert](#the-two-closet-units-are-in-one-place).
 
 **Address the port by MAC, not by number.** `/dev/ttyACM*` is assigned in
 enumeration order and moves when anything is re-plugged; with ten ESP32s on one
@@ -312,11 +315,14 @@ measured so far says which of 67 % and 74 % is the true one, and replacing the
 odd part out would answer only whether that individual differs from its spare.
 
 That is a statement about what may be concluded, not about what may be installed.
-Fitting both closet units with parts from one batch is right for the measurement
-they actually serve: ΔT between intake and exhaust is a difference, so a bias
-shared by the pair cancels out of it, and matched age and lot keep the two channels
-comparable. The mistake would be taking their later agreement as evidence of
-accuracy. A part removed during such a swap is worth keeping for exactly that
+Fitting both closet units with parts from one batch keeps the two channels
+comparable, and matched age and lot are worth having for that alone. What does
+**not** justify it is the sentence written here first — that ΔT between intake and
+exhaust is a difference, so a bias shared by the pair cancels out of it. The two
+closet units stand in the same place, so there is no intake-to-exhaust gradient
+for a shared bias to cancel out of; the only thing that difference measures is
+[the two parts against each other](#the-two-closet-units-are-in-one-place). The
+mistake would be taking their later agreement as evidence of accuracy. A part removed during such a swap is worth keeping for exactly that
 reason — the one carrying a characterisation from before an accident is a witness,
 even though it is not a reference.
 
@@ -727,9 +733,11 @@ them:
 | Vapour pressure (%) | **+3.88** | 0.32 | +3.29 to +4.55 |
 
 **The temperature channel is better than the part is specified to be.** Two units
-0.04 °C apart is a twelfth of the AM2320's ±0.5 °C, and it is the common-mode
-error in `ServerClosetAirflowDegraded` that this removes: the floor on a
-difference of two readings drops from ±1.0 °C to about ±0.05 °C.
+0.04 °C apart is a twelfth of the AM2320's ±0.5 °C. What it does not buy is the
+sentence written here first — that this removes the common-mode error in
+`ServerClosetAirflowDegraded` and drops the floor on that alert's difference from
+±1.0 °C to about ±0.05 °C. Lowering a floor is only worth anything under a signal,
+and [that alert has none](#the-two-closet-units-are-in-one-place).
 
 **The humidity channel is not matched, and is not faulty either.** 2.62 points
 apart with a standard deviation near 0.1 is a fixed offset rather than noise, and
@@ -747,6 +755,58 @@ What it does **not** support is the obvious next sentence, which was written her
 first and is wrong: that the old pair read high *together* and changing the lot
 made a shared-lot bias visible. That conclusion needs the 2026-09-24 BME280
 readings to have been sound, and they cannot be shown to be.
+
+### The two closet units are in one place
+
+Everything above compares the two closet units as parts, and that is the only
+thing their difference can be compared as: **both units stand in the same spot in
+the closet.** That is a fact about where they were installed, not something to be
+inferred from what they report, and the 41 bench samples were therefore not a
+special condition — they were the normal one, moved onto a table.
+
+The installed record says the same thing over a much longer baseline than the
+bench did. Both units in their positions, untouched, 5-minute steps from
+09-25 00:00 to 09-26 09:00 (n=396) — the old pair, before the salt accident and
+before the re-sensoring:
+
+| Exhaust − intake, installed | Mean | sd | Range |
+| --- | --- | --- | --- |
+| Temperature (°C) | **+0.205** | 0.058 | +0.10 to +0.40 |
+| Relative humidity (points) | **+0.043** | 0.210 | −0.50 to +0.60 |
+| Vapour pressure (%) | **+1.273** | 0.423 | +0.24 to +2.66 |
+
+**+0.205 °C installed is the same +0.20 °C this pair held co-located on the bench
+all afternoon.** Standing them in their closet positions and standing them side by
+side on a table are the same measurement, which is what one place means.
+
+That kills an alert. `ServerClosetAirflowDegraded` fires on exhaust minus intake
+above 10 °C for thirty minutes, and its description states the normal value as
+2–3 °C. **No 2–3 °C exists anywhere in the record.** Across those 33 hours the
+largest ΔT is +0.40 °C and the standard deviation is 0.058 °C, so the threshold
+sits about 170 standard deviations away from where the difference actually lives.
+The alert cannot report a stopped fan, a blocked intake, or a clogged filter; the
+only thing that can reach 10 °C is one of the two parts failing. The 2–3 °C in the
+annotation was assumed, never measured, and the rest of that alert's reasoning was
+built on top of it.
+
+Detecting airflow from ΔT needs the two parts actually separated — one in the air
+entering the closet, one in the air leaving it. Until they are, the closet's
+airflow evidence is absolute temperature and nothing else.
+
+The other side of it is that the pair is a continuous null control in one body of
+air, 33 hours of it rather than 41 samples, and it has been running the whole
+time. Run the same comparison across the lot change:
+
+| Exhaust − intake, same air | ΔRH (points) | Δe (%) |
+| --- | --- | --- |
+| Old pair, installed, 09-25→09-26 (n=396) | **+0.043** (sd 0.210) | **+1.273** (sd 0.423) |
+| New matched-lot pair, bench, 09-30 (n=41) | **+2.62** (sd 0.1) | **+3.88** (sd 0.32) |
+
+**The mismatched pair agreed in humidity to 0.04 points; the matched-lot pair is
+2.6 points apart.** Changing the lot tripled the pair's disagreement in vapour
+pressure. Neither figure is a gradient — both pairs were in one body of air — so
+"matching the lot delivered the temperature channel and not the humidity channel"
+is, in the humidity channel, a step backwards from what was there before.
 
 ### Why the 09-24 baseline cannot be trusted, or checked
 
@@ -1003,6 +1063,71 @@ Time can say that, and now there is something to count with. The 09-23 repair
 lasted five days, so five days without `TempmeterPressureOutOfRange` firing is
 the first interval worth anything — and unlike the three silent days in
 September, the counting is automatic.
+
+### Nothing here has an absolute value
+
+The question all of this is in aid of is whether these units need calibrating, and
+the wrong answer is attractive enough to be worth writing down. Reason from the
+thresholds instead of from the instrument and it runs: `ServerClosetHot` fires at
+35 °C and the closet's record peaks at 28.6, so a 1.4 °C disagreement cannot move
+that decision, while `ServerClosetHumid` fires at 70 %RH against a reading near 68,
+so its 2.6-point disagreement can. Temperature then reads as settled and humidity
+as needing work. The arithmetic is right and the question is not the one that was
+asked. **A threshold is a consumer; what a consumer does with a number establishes
+nothing about the number.** The 1.4 °C does not stop mattering because today's
+closet sits far from 35 °C — it stops mattering *at today's closet*, which is not a
+fixed quantity. A reading is finished when it means something on its own, and
+neither channel here does.
+
+**Temperature has no absolute value.** The indoor BME280 reads 1.4 °C above two
+AM2320s in the same place and nothing present says which is right
+([above](#the-14-c-that-has-not-been-assigned-to-anything)). The two AM2320s agree
+to 0.04 °C, which is consistency and not correctness — one batch, so a bias they
+share is invisible in the only comparison available. Whether either is inside the
+±0.5 °C the part is sold as cannot be asked without a reference.
+
+Measured again after all three units were reflashed on 09-30, 20:15–22:30 (n=27):
+
+| °C | Mean | sd |
+| --- | --- | --- |
+| Indoor − intake | **+1.052** | 0.304 |
+| Exhaust − intake | **−0.059** | 0.056 |
+
+The pair figure is the bench figure again — 0.04 to 0.06 °C between two parts of
+one lot, now measured three ways. The cross-type figure is the one that will not
+hold still: at hourly resolution through that evening it runs +1.56, +1.40, +0.93,
++0.75. **1.405 °C is not an offset to subtract; it is where the disagreement
+happened to be during the window it was measured in.**
+
+**Humidity has no absolute value either, and there the window is narrower.** The
+two closet parts are 2.62 points apart and both inside ±3 %RH, which pins the
+truth to the 3.4-point band where their claims overlap and says nothing about
+where in that band either part sits. Reading the intake alone — which is what
+`ServerClosetHumid` does — inherits all of it.
+
+The references are the ones already described, and neither needs a second
+instrument: an ice bath is 0.00 °C while ice remains, a saturated sodium chloride
+solution is 75.3 %RH while salt remains undissolved, and in both the part under
+test is the only thing being read.
+
+Three things went wrong on the way here and are worth the space:
+
+- **`up` is the board's liveness, not the sensor's identity.** Both closet units
+  were re-sensored on 09-30 and `up` stayed 1 throughout — the MAC, the instance
+  label and every series continuous. A sensor swapped on a powered board leaves no
+  trace in any of them, and `up` was used here as evidence that the part had not
+  been changed. The record cannot answer that question; asking can.
+- **A metric has a start date.** `esp32_sensor_ok` first exists at 09-29 13:00 for
+  exhaust, 09-30 19:30 for intake and 09-30 20:15 for indoor, with
+  `esp32_sensor_read_errors_total` and `esp32_sensor_last_read_age_seconds` beside
+  it. The 09-27 failure was described here in terms of all three, none of which
+  existed yet. Check that a series covers a window before reading that window
+  with it.
+- **A quantity this file does not define is not an indicator.** One was invented
+  mid-session — the difference between the two closet humidities, given a name and
+  reasoned with — and it appears nowhere in this project. Unpacked it carried
+  nothing the two series side by side did not already carry. A new quantity
+  belongs in this file before it belongs in an argument.
 
 ## Notes from building it
 
