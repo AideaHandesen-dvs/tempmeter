@@ -36,7 +36,8 @@ the hardware described below.
 
 The sensor type and the pin assignments are all in one block at the top of
 `src/main.cpp`. The default there is the BME280; build for an AM2320 either by
-changing `SENSOR_TYPE`, or with the flag in `platformio.ini`:
+changing `SENSOR_TYPE`, or with the flag — which is what the `closet` environment
+in `platformio.ini` supplies, `indoor` supplying the BME280 one:
 
 ```ini
 build_flags =
@@ -81,18 +82,44 @@ served over Wi-Fi. What is lost is the local indication of AP mode and the
 temperature/humidity read-out, both of which then exist only on the serial
 monitor and the web page.
 
-`platformio.ini` as committed builds for this case — AM2320, no display.
+All three units here are built this way, so `USE_DISPLAY=0` sits in the shared
+`[common]` section of `platformio.ini` rather than in any one environment.
 
 ## Build and flash
 
 With [PlatformIO](https://platformio.org/):
 
 ```sh
-pio run -t upload
-pio device monitor      # 115200 baud
+pio run -e closet -t upload      # AM2320, the two closet units
+pio run -e indoor -t upload      # BME280, the indoor unit
+pio device monitor               # 115200 baud
 ```
 
-The environment is `esp32-c3-devkitm-1`, which is what a SuperMini flashes as.
+**There is one environment per kind of unit, and editing `platformio.ini` before
+a flash is not part of the procedure.** It used to be: the sensor was selected by
+a build flag in the one environment, commented in or out by hand. That is a way
+to put the closet's AM2320 firmware on the indoor BME280 in a single command, and
+to leave the file un-reverted in the next commit. With environments the only way
+to get it wrong is to mistype `-e`, and `-e` is on the screen.
+
+| Environment | Sensor | Unit | id (MAC) | Address |
+| --- | --- | --- | --- | --- |
+| `closet` | AM2320 | closet intake | `10:00:3B:CC:E8:48` | 192.168.1.195 |
+| `closet` | AM2320 | closet exhaust | `10:00:3B:CC:A9:4C` | 192.168.1.112 |
+| `indoor` | BME280 | indoor | `08:92:72:91:5D:9C` | 192.168.1.156 |
+
+`default_envs = closet`, because two of the three are that.
+
+**Address the port by MAC, not by number.** `/dev/ttyACM*` is assigned in
+enumeration order and moves when anything is re-plugged; with ten ESP32s on one
+hub that is a real way to flash the wrong board:
+
+```sh
+pio run -e indoor -t upload \
+  --upload-port /dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_08:92:72:91:5D:9C-if00
+```
+
+The board is `esp32-c3-devkitm-1`, which is what a SuperMini flashes as.
 USB CDC is enabled on boot (`ARDUINO_USB_MODE=1`, `ARDUINO_USB_CDC_ON_BOOT=1`),
 so the serial monitor is the board's own USB port and no separate adapter is
 needed. Libraries are declared in `platformio.ini` and fetched on the first
@@ -258,19 +285,21 @@ Bosch's recommended weather setting is forced mode, 1× oversampling, one sample
 a minute. That has since been changed on its own account: the firmware now asks
 for forced mode with 1× on all three channels and takes each reading with
 `takeForcedMeasurement()`, which brings the duty cycle from 99.6 % to about
-0.3 %. The indoor unit has not been reflashed yet, so the figures in this section
-are still the ones the old settings produced. The change is not the explanation
-for the 7.5 %.
+0.3 %. The indoor unit was reflashed with it at 20:00 on 2026-09-30 and the step
+it produced was measured directly — see [below](#measuring-the-self-heating-instead-of-bounding-it).
+The figures in the rest of this section are the ones the old settings produced.
+The change is not the explanation for the 7.5 %.
 
 The reason it is not this is that the same die temperature is what the part
 reports as temperature, so self-heating has to appear in both readings at once,
 in a fixed ratio. Near 28 °C, saturation vapour pressure moves about 6 % per °C:
 
-| | Needed for 7.5 % RH | Observed |
+| Die above air temperature | Needed for 7.5 % RH | Observed |
 | --- | --- | --- |
-| Die above air temperature | ~1.7 °C | +0.2 °C |
+| Inferred from the AM2320 comparison | ~1.7 °C | +0.2 °C |
+| Measured across the mode change, 09-30 | ~1.7 °C | **0.33 °C** |
 
-Seven times short. Self-heating can account for roughly one percentage point of
+Five times short at the larger of the two, and that one is a measurement. Self-heating can account for roughly one percentage point of
 the seven and a half. A hypothesis about a sensor that reads two quantities off
 one die can usually be checked against the other quantity for free, which is
 worth trying before changing any hardware.
@@ -684,6 +713,33 @@ of RH, just outside the ±2 points the 70 % closet-humidity threshold was
 calculated to need. Matching the lot delivered the temperature channel and not the
 humidity channel.
 
+Those figures are one sample each. Repeating the comparison on 09-30 with both
+closet units side by side on the bench, 41 samples over twenty minutes, settles
+them:
+
+| Closet exhaust minus intake | Mean | sd | Range |
+| --- | --- | --- | --- |
+| Temperature (°C) | **−0.037** | 0.048 | −0.10 to +0.00 |
+| Relative humidity (ratio) | **×1.0410** | 0.0019 | ×1.0359 to ×1.0455 |
+| Vapour pressure (%) | **+3.88** | 0.32 | +3.29 to +4.55 |
+
+**The temperature channel is better than the part is specified to be.** Two units
+0.04 °C apart is a twelfth of the AM2320's ±0.5 °C, and it is the common-mode
+error in `ServerClosetAirflowDegraded` that this removes: the floor on a
+difference of two readings drops from ±1.0 °C to about ±0.05 °C.
+
+**The humidity channel is not matched, and is not faulty either.** 2.62 points
+apart with a standard deviation near 0.1 is a fixed offset rather than noise, and
+±3 %RH is what an AM2320 is sold as, so both readings are in specification and
+the truth is only pinned to the 3.4-point window where their claims overlap.
+
+That settles what the salt jar is now for. The dispute it was built to decide is
+void, but `ServerClosetHumid` still rests on one channel — the intake unit's
+humidity — whose absolute value is uncertain by at least ±1.7 points. What is
+wanted is one absolute anchor on that one part. **Standing a second identical
+part next to it cannot supply that**, which is the thing these 41 samples
+demonstrate rather than assert.
+
 What it does **not** support is the obvious next sentence, which was written here
 first and is wrong: that the old pair read high *together* and changing the lot
 made a shared-lot bias visible. That conclusion needs the 2026-09-24 BME280
@@ -742,6 +798,22 @@ named this on 09-28, two days before it went total, and it is the piece of this
 that generalises: a part without a checksum needs one channel whose valid range is
 narrow enough to betray the others.
 
+The rule exists now — `TempmeterPressureOutOfRange`, `for: 0m` — but not on the
+950–1050 hPa band first written down here. **What the part reports is station
+pressure, uncorrected to sea level**, and a strong typhoon making landfall in
+Japan reaches into that band on its own: 950 to 970 hPa is an ordinary central
+pressure, and altitude takes the station reading lower still. The band is
+900–1080, outside anything the weather does and inside nothing this fault
+produces. Backtested over the six hours containing the failure, the two bands
+catch the same 154 samples: the corrupt values were −64, 758.6, −10363 and
+256470 hPa, and the innermost of them is 140 hPa clear of the wider limit.
+Widening it cost no detections and removed a class of false alarm.
+
+The converse stays unavailable, and the rule's comment says so. A pressure
+inside the band is not evidence that the reading beside it is sound — corrupt
+samples can land anywhere. This is a sufficient condition for distrust and not a
+necessary one.
+
 It is also not academic. `ServerClosetHumid` fired on the intake unit for nine
 hours on 09-28, on the old sensor, at the 70 % threshold whose accuracy is exactly
 what was in dispute. Whether that was a real closet or a high-reading part is one
@@ -783,6 +855,77 @@ the signal path: the two pull-up resistors soldered directly across the breakout
 own pins, VCC to SDA and VCC to SCL, removes two of them for the price of bending
 two leads.
 
+### Measuring the self-heating instead of bounding it
+
+The indoor unit was reflashed at 20:00 on 2026-09-30, and a one-second poll
+happened to be running across the change, so `MODE_NORMAL` at 16× and forced mode
+at 1× were both recorded on the same instrument. The intake AM2320 went through
+untouched, which makes it a reference for the room's own drift:
+
+| Indoor minus intake | Before | After | Change |
+| --- | --- | --- | --- |
+| Temperature (°C) | +1.756 (sd 0.139) | +1.422 (sd 0.054) | **−0.334** |
+| Relative humidity (points) | −5.818 (sd 0.269) | −5.382 (sd 0.180) | +0.436 |
+| Vapour pressure (%) | +0.742 (sd 0.588) | −0.528 (sd 0.341) | −1.271 |
+
+**The temperature step is clean, and its shape says it is the die and not the
+board.** The offset goes from +1.7 to +1.4 within one scrape and then sits there
+for the next half hour with no trend at all. A board shedding a third of a degree
+has a thermal mass and would show a curve over minutes; a die whose duty cycle
+fell from 99.6 % to 0.3 % settles in seconds. The old configuration was running
+the part 0.33 °C above the air it was measuring.
+
+That is the number the self-heating argument never had. At 5.85 %/°C near 27 °C
+and 58 %RH it comes to about 1.1 points of relative humidity — which is what
+[the estimate above](#ruling-out-self-heating) said, now from a measurement of
+this part rather than an inference from a different one.
+
+**The humidity side does not close, and it should have.** Under self-heating
+alone the reported vapour pressure is invariant: the film reads the RH at the
+die's temperature, the part reports that same temperature, and `e = RH × es(T)`
+hands back the air's true value whatever the die is doing. Removing 0.334 °C
+should therefore have lifted RH by 1.13 points and left `e` where it was. RH rose
+0.44 points and `e` moved 1.27 %. Either something that is not a temperature
+changed, or the control is not good enough — the two units sit 1.4 °C apart and
+so are not in one body of air, and 1.27 % of drift between two spots in a room
+over twenty-five minutes is unremarkable. Nothing here separates those, and
+separating them wants both parts in a single volume of air, which is the salt jar
+built for a different question.
+
+One cost is visible and was expected. Dropping oversampling from 16× to 1× put
+the noise up: over ten-minute windows the pressure standard deviation went from
+0.000 to 0.048 hPa and the temperature's from 0.018 to 0.048 °C. That is what the
+duty cycle was bought with. It also happens to help `TempmeterStuck`, which fires
+on a standard deviation of exactly zero.
+
+### Tapping a contact proves one direction only
+
+After the loose pull-up leg was re-seated — pushed into a hole alongside a jumper
+pin, so the 0.64 mm pin spreads the clip and the thin leg is pinched against it —
+the unit was polled once a second while the board was deliberately provoked:
+resistors flicked, legs levered, the breakout pressed and twisted, jumpers
+wobbled, the breadboard tapped. 196 samples over 215 seconds with no gap longer
+than two, and the pressure took two values the whole time, 1010.3 and 1010.4.
+
+The handling is visible in the log, which is the only reason the provocation can
+be shown to have landed inside the recorded window at all: a hand near the part
+puts the humidity up, and three excursions appear, the first peaking at 63.7 %
+against a quiet 57.6 %. The pressure does not move in any of them.
+
+**The negative is weak, and the reason is that the test's sensitivity is
+unknown.** Nothing has ever shown this fault to be tap-inducible. The 09-30
+onset — one bad sample at 17:28, total by 17:47 — has no recorded mechanical
+provocation behind it, and the one documented case of a finger on this hardware
+*restored* the contact rather than breaking it. Mechanical disturbance is
+associated with both ends of the fault and the transfer function between them is
+not known. What the test rules out is a contact hanging by a thread. It cannot
+say the repair holds.
+
+Time can say that, and now there is something to count with. The 09-23 repair
+lasted five days, so five days without `TempmeterPressureOutOfRange` firing is
+the first interval worth anything — and unlike the three silent days in
+September, the counting is automatic.
+
 ## Notes from building it
 
 - **Turn the radio down.** The SuperMini's antenna and regulator do not like
@@ -805,6 +948,13 @@ two leads.
   breadboard clip is one more spring in the bus, and when it loosens a BME280
   reports numbers rather than errors. Bending two 4.7 kΩ leads across VCC-to-SDA
   and VCC-to-SCL costs nothing and takes them out of the signal path.
+- **An older build does not report its own MAC**, which leaves it unidentifiable
+  among ten ESP32s on one hub. `ping` it once and read `ip neigh show <ip>`: the
+  Wi-Fi MAC the ARP table gives back is the same string the USB JTAG serial
+  number is built from, so it maps straight onto `/dev/serial/by-id/`. That is how
+  the indoor unit was tied to `08:92:72:91:5D:9C` before it was reflashed — and
+  the `id` the new firmware then reported confirmed the right board had been
+  written.
 - Credentials live in NVS under the `wifi-store` namespace, not in the source.
 
 ### Known limitation
