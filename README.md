@@ -282,6 +282,15 @@ possibly the same production lot, so a shared bias would be invisible. Nothing
 measured so far says which of 67 % and 74 % is the true one, and replacing the
 odd part out would answer only whether that individual differs from its spare.
 
+That is a statement about what may be concluded, not about what may be installed.
+Fitting both closet units with parts from one batch is right for the measurement
+they actually serve: ΔT between intake and exhaust is a difference, so a bias
+shared by the pair cancels out of it, and matched age and lot keep the two channels
+comparable. The mistake would be taking their later agreement as evidence of
+accuracy. A part removed during such a swap is worth keeping for exactly that
+reason — the one carrying a characterisation from before an accident is a witness,
+even though it is not a reference.
+
 Settling it needs a humidity that is known rather than measured. A saturated
 salt solution provides one: undissolved salt keeps the solution at its
 saturation concentration, which fixes the vapour pressure above it, and for
@@ -357,6 +366,30 @@ not after. Its library default keeps the die at a 99.6 % duty cycle, and inside 
 small sealed volume with no convection that heat has nowhere to go — a sensor
 warmer than the solution reads low at 4.3 points per °C, which is the very error
 under test. Left as it is, the instrument writes its own answer.
+
+### Why not a wet and dry bulb
+
+A psychrometer is the other physical reference, and it is the worse one here for a
+reason that has nothing to do with chemistry. Humidity from wet and dry bulbs is a
+derived quantity: near room temperature it moves about 6 to 7 %RH per °C of
+wet-bulb depression, so resolving ±3 %RH means reading both bulbs to about
+±0.2 °C, and the wet bulb needs its specified airflow past it as well. A household
+static hygrometer has neither the graduations nor the ventilation and lands near
+±5 %, the same order as the 7.5 points in dispute — an instrument whose error
+matches the effect settles nothing. An aspirated (Assmann) psychrometer would, for
+tens of thousands of yen.
+
+The salt solution moves the difficulty somewhere cheaper. Nothing in it has to be
+read accurately: while undissolved salt remains, thermodynamics fixes the vapour
+pressure, and the only instrument in the experiment is the sensor under test. What
+it demands instead is temperature uniformity, bought with a jar, a bucket of water
+and a towel rather than with an instrument.
+
+| | What has to be read accurately | Reference accuracy |
+| --- | --- | --- |
+| Household psychrometer | both bulbs to ±0.2 °C, plus airflow | ~±5 % |
+| Aspirated psychrometer | the same, but the instrument provides it | ~±2 % |
+| Saturated salt | nothing except the sensor under test | ±0.2 % |
 
 ### The first attempt wet the sensor
 
@@ -544,6 +577,33 @@ nothing about whether that number had come from a sensor. It now reports both.
 tracks uptime means nothing has ever been read, while an age shorter than uptime
 means it worked and then stopped. That is the distinction this cost a day to
 learn.
+
+### Reading the reports on a sensor that was not there
+
+The design was exercised for real within the day. With no sensor on the bus the
+unit publishes no temperature and no humidity at all, `sensor_ok` reads 0,
+`read_errors` climbs every three seconds — and `up` stays 1, which is the whole
+point. `TempmeterSensorFailing` fired ten minutes in. `TempmeterStuck` stayed
+quiet, having no temperature series to find frozen, so one cause produced one
+alert. That is the same shape of failure that went unnoticed for four hours two
+days earlier.
+
+The diagnosis it supports is worth recording as a sequence. `last_rv` came back
+-11, `AM232X_ERROR_CONNECT`, meaning the address phase never drew an ACK — silence
+rather than corruption, which rules out the pull-up class of fault whose symptom is
+plausible numbers. `i2c_hung_at_boot` came back false, so SDA was not being held by
+a slave reset mid-transfer. A run at 20 kHz changed nothing, which rules out
+marginal timing, since a clock two and a half times slower rescues a sensor that is
+merely close to the edge. Three candidate causes, eliminated from across the house
+in minutes.
+
+The part had been unscrewed. `ERROR_CONNECT` covers "not there" as readily as "not
+answering", and three flashes went into characterising a sensor that was absent,
+because nothing in the process asked what had changed physically. The same omission
+had already put the part on a warm surface in an earlier round of analysis when it
+was in fact sitting beside its twin, which is where the numbers that settled the
+film came from. A report of a remote reading is only as good as the assumption
+about what the hardware is doing, and that assumption is cheap to check by asking.
 
 ## Notes from building it
 
