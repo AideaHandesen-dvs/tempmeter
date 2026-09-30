@@ -676,19 +676,76 @@ falls **between** the two AM2320s. On 2026-09-24 the same comparison at one
 temperature had both AM2320s 11.4 % above it in `e`. The gap is gone, and the
 BME280 is no longer the odd part out.
 
-What that licenses is narrow and worth stating exactly. The old pair read high
-*together* — which is the shared-lot bias the earlier section said would be
-invisible in their 0.2 % agreement. Changing the lot is what made it visible. It
-says nothing about any part being accurate, and the new pair agreeing would say
-nothing either.
+The reading above is what today's hardware says, and it stands on its own: three
+co-located parts, the BME280 verified sample-by-sample first, agreeing inside
+±2.6 % in vapour pressure. The residual is not small — the two new parts, at a
+temperature difference of exactly 0.00 °C, are 3.9 % apart in `e`, about 2.5 points
+of RH, just outside the ±2 points the 70 % closet-humidity threshold was
+calculated to need. Matching the lot delivered the temperature channel and not the
+humidity channel.
 
-It does change what the salt test is for. The argument it was going to settle no
-longer exists; what remains is an absolute anchor on the error the three parts
-have in common, which the ±3 %RH part tolerance floors anyway. And the residual is
-not small: the two new parts, at a temperature difference of exactly 0.00 °C, are
-3.9 % apart in `e` — about 2.5 points of RH, just outside the ±2 points the 70 %
-closet-humidity threshold was calculated to need. Matching the lot delivered the
-temperature channel and not the humidity channel.
+What it does **not** support is the obvious next sentence, which was written here
+first and is wrong: that the old pair read high *together* and changing the lot
+made a shared-lot bias visible. That conclusion needs the 2026-09-24 BME280
+readings to have been sound, and they cannot be shown to be.
+
+### Why the 09-24 baseline cannot be trusted, or checked
+
+Scanning the retained history for pressures outside 950–1050 hPa — the only
+cross-check that exists on a part with no checksum — finds the BME280 corrupting
+samples for days before it was ever moved:
+
+| When | Pressure | Temperature | Humidity |
+| --- | --- | --- | --- |
+| 09-28 17:16 | −64.3 | 27.7 | 65 |
+| 09-28 17:29 | −64.3 | 27.7 | **69** |
+| 09-28 17:38 | −64.4 | 27.8 | 64.9 |
+| 09-29 12:01 | 758.6 | 20.3 | 80.6 |
+| 09-29 22:51 | 758.6 | 20.3 | 80.6 |
+| 09-30 16:45 | −10363.3 | 24.3 | **29.2** |
+
+Two things fall out of that table. **The 09-23 repair never held** — adding the
+resistors fixed the waveform, and their legs sitting in breadboard clips left the
+fault free to come back, which it had done by 09-28 at the latest. And **a corrupt
+sample can carry a plausible temperature beside a badly wrong humidity**: 29.2 %
+in air that was near 60, and 69 % between neighbours reading 65. Nothing in the
+temperature or humidity channel marks either one.
+
+That is precisely the error the 09-24 comparison would have to have been free of.
+A BME280 reading 7.5 points low in RH, with a plausible temperature, is inside the
+range of what this fault demonstrably produces. And it cannot be checked: the
+Prometheus TSDB begins 2026-09-26 19:10, so 09-24 is not in it and never will be.
+The 11.4 % figure survives only as a number recorded in a conversation, on a part
+now known to have been intermittently lying in that era.
+
+So the 7.5 %RH argument is not resolved in the BME280's favour. It is **void** —
+one side of it was measured on an instrument that cannot be shown to have been
+working. The three parts agree today, which is the useful half, and the old lot's
+behaviour is now unknowable rather than exonerated or convicted. The one part that
+could still speak to it is the old intake AM2320, kept for this reason: put beside
+the new pair it says whether that individual reads high, which is a smaller claim
+than the lot but a measurable one.
+
+### Nothing was watching the only channel that could tell
+
+Not one alert fired for any of those six samples, or for the sporadic phase on
+09-30 that preceded the freeze. `TempmeterStuck` needs an hour of a motionless
+series and single bad samples never produce one; `TempmeterSensorFailing` reads a
+flag the BME280 build sets from a read that succeeded. Three days of a
+progressively failing bus, and the monitoring said nothing.
+
+The barometer is the canary, and it is the only one available on this part. One
+sample outside 950–1050 hPa is already proof of a corrupted transfer — no
+averaging, no `for:` duration, because the fault is sporadic by nature and waiting
+for persistence is waiting for it to get worse. A rule that simple would have
+named this on 09-28, two days before it went total, and it is the piece of this
+that generalises: a part without a checksum needs one channel whose valid range is
+narrow enough to betray the others.
+
+It is also not academic. `ServerClosetHumid` fired on the intake unit for nine
+hours on 09-28, on the old sensor, at the 70 % threshold whose accuracy is exactly
+what was in dispute. Whether that was a real closet or a high-reading part is one
+more thing the missing data does not say.
 
 ### Everything that has failed here has been a spring
 
