@@ -605,6 +605,50 @@ was in fact sitting beside its twin, which is where the numbers that settled the
 film came from. A report of a remote reading is only as good as the assumption
 about what the hardware is doing, and that assumption is cheap to check by asking.
 
+### A new part on a connector that was not connecting
+
+The replacement AM2320 arrived and went onto the exhaust unit, and the unit
+reported exactly what it had reported with no sensor on it at all: no
+`temperature` and no `humidity` in the JSON, `sensor_ok` 0, `read_errors`
+climbing, `last_rv` −11. A fresh part rules out the part, which leaves the
+wiring, and the wiring was a female DuPont crimp whose spring had been splayed
+open by re-seating until it sat over the header pin without gripping it. Pinching
+the contact closed with a pick fixed it — nothing in the firmware or on the bus
+changed.
+
+What said "connection" rather than "component" was in the series already, in the
+shape of `last_read_age_s` across three windows of one afternoon:
+
+| Window (JST) | What the series did | State |
+| --- | --- | --- |
+| 16:47–17:14 | Age tracks uptime to 1727 s, errors accrue steadily, no temperature series exists | Never read once |
+| 17:15–17:23 | Age resets, then dips twice inside one boot — 19→79, 24→84, 45→285 — and a temperature series appears and immediately freezes | Reads landing occasionally |
+| 17:24 onward | Age 0–1 s, `read_errors` 0, values tracking the room | Fixed |
+
+**Intermittency is the signature of a mechanical contact.** A part that is
+absent, latched into single-bus mode, or corroded open is mute consistently. A
+contact that is nearly touching is mute most of the time and answers when it
+happens to touch, and that middle window is the whole diagnosis. `last_read_age_s`
+went in to separate never-read from read-and-stopped; it separates a third state
+for free, because an age that falls without the uptime falling can only mean a
+read succeeded after one failed. The error counter alone does not show this —
+twenty failures a minute looks much the same whether one attempt in thirty
+succeeds or none do. (The accrual rate itself differed between the two windows,
+13 a minute and then 20, on a fixed three-second interval. A failure slow enough
+to make the following attempt return `AM232X_READ_TOO_FAST`, which is deliberately
+not counted, would produce that, but it was not measured and the rate is not what
+the diagnosis rests on.)
+
+**A restart that changes nothing does not point at the part.** One happened
+between the first two windows and the unit came back just as mute. The previous
+round used "only a power cycle clears a single-bus latch" as a reason to suspect
+the sensor; a splayed crimp survives a power cycle every bit as well.
+
+So `ERROR_CONNECT` now covers three things — not there, not connected, and not
+gripping. Both times this unit has gone silent the cause turned out to be
+mechanical and was found by hand, after remote reasoning had eliminated the
+electrical candidates correctly and still not named it.
+
 ## Notes from building it
 
 - **Turn the radio down.** The SuperMini's antenna and regulator do not like
@@ -618,6 +662,11 @@ about what the hardware is doing, and that assumption is cheap to check by askin
   cannot share a bus. It also picks its protocol at power-up: if SCL is low at
   that instant it comes up in single-bus mode instead of I2C, and only a power
   cycle changes its mind.
+- **A female DuPont crimp that has been re-seated a few too many times stops
+  gripping.** The spring splays open, the socket rests on the header pin without
+  making contact, and on I2C that reads as `AM232X_ERROR_CONNECT` — the same thing
+  a missing sensor reports. Squeeze the contact shut with a pick before suspecting
+  the part; see [above](#a-new-part-on-a-connector-that-was-not-connecting).
 - Credentials live in NVS under the `wifi-store` namespace, not in the source.
 
 ### Known limitation
