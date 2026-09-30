@@ -649,6 +649,83 @@ gripping. Both times this unit has gone silent the cause turned out to be
 mechanical and was found by hand, after remote reasoning had eliminated the
 electrical candidates correctly and still not named it.
 
+### The answer, from two new parts
+
+Both closet units were re-sensored with parts from one new batch, which put the
+other AM2320 — the one the 7.5 %RH argument had been left waiting on — back in
+play. All three units sat in the same place for the comparison, and because they
+settle at slightly different temperatures the quantity to compare is vapour
+pressure, `e = RH × es(T)`, not relative humidity. Raw RH differences between
+units at different temperatures are mostly a picture of the temperature
+difference. Comparing `e` also cancels a warm die to first order: the film and the
+thermometer share a package, so a part reading its own elevated temperature
+reports the RH at that temperature, and the product comes back to the true vapour
+pressure.
+
+Taken with the BME280 verified healthy — 30 consecutive samples, pressure
+identical across all of them:
+
+| Unit | T (°C) | RH (%) | e (hPa) | Td (°C) |
+| --- | --- | --- | --- | --- |
+| BME280, indoor | 27.2 | 59.5 | 21.413 | 18.62 |
+| AM2320, intake, new | 25.7 | 64.0 | 21.084 | 18.38 |
+| AM2320, exhaust, new | 25.7 | 66.7 | 21.973 | 19.04 |
+
+Against the BME280 that is −1.5 % and +2.6 % in vapour pressure, and the BME280
+falls **between** the two AM2320s. On 2026-09-24 the same comparison at one
+temperature had both AM2320s 11.4 % above it in `e`. The gap is gone, and the
+BME280 is no longer the odd part out.
+
+What that licenses is narrow and worth stating exactly. The old pair read high
+*together* — which is the shared-lot bias the earlier section said would be
+invisible in their 0.2 % agreement. Changing the lot is what made it visible. It
+says nothing about any part being accurate, and the new pair agreeing would say
+nothing either.
+
+It does change what the salt test is for. The argument it was going to settle no
+longer exists; what remains is an absolute anchor on the error the three parts
+have in common, which the ±3 %RH part tolerance floors anyway. And the residual is
+not small: the two new parts, at a temperature difference of exactly 0.00 °C, are
+3.9 % apart in `e` — about 2.5 points of RH, just outside the ±2 points the 70 %
+closet-humidity threshold was calculated to need. Matching the lot delivered the
+temperature channel and not the humidity channel.
+
+### Everything that has failed here has been a spring
+
+Four faults have been found in this project, and under the symptoms they are one
+fault:
+
+| | The contact | Symptom |
+| --- | --- | --- |
+| Aug–Sep | No pull-ups at all — the internal 45 kΩ carrying the bus | Plausible lies |
+| Sep 30, 17:15 | A DuPont female crimp splayed open | Silence, `-11` |
+| Sep 30, 17:32 | A pull-up leg loose in its breadboard clip | Lies, then one frozen constant |
+
+The salt-water accident is the one exception, and it is the only failure in the
+list that was not a connection.
+
+**The symptom does not follow the fault; it follows the checksum.** The AM2320
+carries a Modbus CRC, so a marginal connection reaches the firmware as a failed
+read. The BME280's data registers carry none, so the same marginal connection
+reaches the firmware as a number. Two parts on the same kind of broken wire,
+reporting opposite things, and the difference is entirely in what the protocol
+lets the library verify.
+
+The breadboard fault also came with a reminder about what fixed it. A power cycle
+was the action, and the sensor came back healthy — which looks like evidence
+against a loose contact, because a reset does not tighten anything. It was not the
+reset. The board was handled to do it, and the loose pull-up leg could be wobbled
+by a fingertip, which is what actually restored the contact. An intervention that
+involves touching the hardware proves nothing about the electrical theory it seems
+to confirm.
+
+The conclusion is about where the springs are rather than about enclosures. A case
+keeps a build from being knocked; it does not make a breadboard clip grip, and the
+clip goes on being a spring inside it. The cheap fix is to take the springs out of
+the signal path: the two pull-up resistors soldered directly across the breakout's
+own pins, VCC to SDA and VCC to SCL, removes two of them for the price of bending
+two leads.
+
 ## Notes from building it
 
 - **Turn the radio down.** The SuperMini's antenna and regulator do not like
@@ -667,6 +744,10 @@ electrical candidates correctly and still not named it.
   making contact, and on I2C that reads as `AM232X_ERROR_CONNECT` — the same thing
   a missing sensor reports. Squeeze the contact shut with a pick before suspecting
   the part; see [above](#a-new-part-on-a-connector-that-was-not-connecting).
+- **Solder the pull-ups to the breakout's own pins.** A resistor leg in a
+  breadboard clip is one more spring in the bus, and when it loosens a BME280
+  reports numbers rather than errors. Bending two 4.7 kΩ leads across VCC-to-SDA
+  and VCC-to-SCL costs nothing and takes them out of the signal path.
 - Credentials live in NVS under the `wifi-store` namespace, not in the source.
 
 ### Known limitation
