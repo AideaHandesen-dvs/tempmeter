@@ -744,17 +744,21 @@ apart with a standard deviation near 0.1 is a fixed offset rather than noise, an
 ±3 %RH is what an AM2320 is sold as, so both readings are in specification and
 the truth is only pinned to the 3.4-point window where their claims overlap.
 
-That settles what the salt jar is now for. The dispute it was built to decide is
-void, but `ServerClosetHumid` still rests on one channel — the intake unit's
-humidity — whose absolute value is uncertain by at least ±1.7 points. What is
-wanted is one absolute anchor on that one part. **Standing a second identical
-part next to it cannot supply that**, which is the thing these 41 samples
-demonstrate rather than assert.
+That settles what the salt jar is now for. The dispute it was built to decide
+[is still open](#the-09-24-comparison-audited) — the 09-24 record puts two old
+AM2320s about seven and a half points of RH above the BME280 and says nothing
+about which side of that is wrong — but `ServerClosetHumid` still rests on one
+channel — the intake unit's humidity — whose absolute value is uncertain by at
+least ±1.7 points. What is wanted is one absolute anchor on that one part.
+**Standing a second identical part next to it cannot supply that**, which is the
+thing these 41 samples demonstrate rather than assert.
 
 What it does **not** support is the obvious next sentence, which was written here
-first and is wrong: that the old pair read high *together* and changing the lot
-made a shared-lot bias visible. That conclusion needs the 2026-09-24 BME280
-readings to have been sound, and they cannot be shown to be.
+first: that the old pair read high *together* and changing the lot made a
+shared-lot bias visible. The 09-24 readings are [sound after
+all](#the-09-24-comparison-audited), and they do put both old parts high against
+the BME280 — but that convicts the pair against the third part without saying
+which side is wrong, which is the same missing anchor one channel over.
 
 ### The two closet units are in one place
 
@@ -808,7 +812,14 @@ pressure. Neither figure is a gradient — both pairs were in one body of air �
 "matching the lot delivered the temperature channel and not the humidity channel"
 is, in the humidity channel, a step backwards from what was there before.
 
-### Why the 09-24 baseline cannot be trusted, or checked
+### The 09-24 comparison, audited
+
+This file used to say the 09-24 comparison could not be checked, on the grounds
+that "the Prometheus TSDB begins 2026-09-26 19:10". **That start date was wrong.**
+It is what `docker inspect prometheus` reports as the container's `StartedAt`, and
+the lock file carries the same timestamp — a restart, read as the beginning of a
+database. Every tempmeter series actually begins at **2026-09-24 13:27**, and
+retention is 90 days, so nothing was lost.
 
 Scanning the retained history for pressures outside 950–1050 hPa — the only
 cross-check that exists on a part with no checksum — finds the BME280 corrupting
@@ -828,22 +839,32 @@ resistors fixed the waveform, and their legs sitting in breadboard clips left th
 fault free to come back, which it had done by 09-28 at the latest. And **a corrupt
 sample can carry a plausible temperature beside a badly wrong humidity**: 29.2 %
 in air that was near 60, and 69 % between neighbours reading 65. Nothing in the
-temperature or humidity channel marks either one.
+temperature or humidity channel marks either one. Only the pressure does, and it
+is wrong in the same sample, at the same instant.
 
-That is precisely the error the 09-24 comparison would have to have been free of.
-A BME280 reading 7.5 points low in RH, with a plausible temperature, is inside the
-range of what this fault demonstrably produces. And it cannot be checked: the
-Prometheus TSDB begins 2026-09-26 19:10, so 09-24 is not in it and never will be.
-The 11.4 % figure survives only as a number recorded in a conversation, on a part
-now known to have been intermittently lying in that era.
+**Audited, the 09-24 comparison holds up.** The three units were in one place, and
+15:00–15:20 is present at fifteen-second resolution with no gap: all 81 samples
+read 1007.10 to 1007.20 hPa. The corruption 09-24 does contain is at 18:30:15
+(1255.5 hPa) and 18:40 (−63.9 hPa), three hours after the comparison. The indoor
+humidity falls 71.8 → 60.6 across the window in steps of 0.0 to −1.2 points,
+tracking the two AM2320s' own shape from seven and a half points above it — the
+fault's signature is a frozen constant, as at 09-30 17:44–18:12 where
+758.6 / 20.3 / 80.6 repeats for 27 minutes, and there is nothing of that here. The
+figure itself is in the database: at 15:05:00 both AM2320s read **+11.64 %** above
+the BME280 in `e`, at 15:06:30 **+11.45 %** and **+11.75 %**.
 
-So the 7.5 %RH argument is not resolved in the BME280's favour. It is **void** —
-one side of it was measured on an instrument that cannot be shown to have been
-working. The three parts agree today, which is the useful half, and the old lot's
-behaviour is now unknowable rather than exonerated or convicted. The one part that
-could still speak to it is the old intake AM2320, kept for this reason: put beside
-the new pair it says whether that individual reads high, which is a smaller claim
-than the lot but a measurable one.
+So the 7.5 %RH argument is **not** void. It is a real three-way disagreement: two
+old AM2320s agreeing with each other to 0.04 points and both some seven and a half
+points of RH above a BME280 that was not corrupting samples at the time. What is
+still missing is the same thing that was missing before — a side of it that can be
+tied to a fixed point. The BME280 is the one with a demonstrated fault history, but
+"not corrupting samples" is a statement about the fault and not about accuracy: a
+clean register read does not make a part right, and convicting the old lot needs
+the BME280 to have been correct, which is one assumption further than the data
+goes. The three parts agree today, which is the useful half. The one part that
+could still speak to 09-24 is the old intake AM2320, kept for this reason: put
+beside the new pair it says whether that individual reads high, which is a smaller
+claim than the lot but a measurable one.
 
 ### Nothing was watching the only channel that could tell
 
@@ -1118,7 +1139,7 @@ Three things went wrong on the way here and are worth the space:
   trace in any of them, and `up` was used here as evidence that the part had not
   been changed. The record cannot answer that question; asking can.
 - **A metric has a start date.** `esp32_sensor_ok` first exists at 09-29 13:00 for
-  exhaust, 09-30 19:30 for intake and 09-30 20:15 for indoor, with
+  exhaust, 09-30 19:30 for intake and 09-30 20:30 for indoor, with
   `esp32_sensor_read_errors_total` and `esp32_sensor_last_read_age_seconds` beside
   it. The 09-27 failure was described here in terms of all three, none of which
   existed yet. Check that a series covers a window before reading that window
