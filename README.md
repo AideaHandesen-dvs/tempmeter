@@ -82,8 +82,16 @@ served over Wi-Fi. What is lost is the local indication of AP mode and the
 temperature/humidity read-out, both of which then exist only on the serial
 monitor and the web page.
 
-All three units here are built this way, so `USE_DISPLAY=0` sits in the shared
-`[common]` section of `platformio.ini` rather than in any one environment.
+The two closet units here are built this way. The indoor unit is not — it carries
+a display and reads it — so the flag sits in the environments in
+`platformio.ini`, **not** in the shared `[common]` section. It was shared for the
+week from 2026-09-30: `USE_DISPLAY=0` in `[common]` reached the indoor unit too,
+the next flash compiled the display out, and the digits froze at the last reading
+that had been written to them — a TM1637 holds its own register until something
+drives CLK and DIO again, and a reflash resets the MCU without dropping the
+display's power. Nothing else on that unit failed, and no metric can see this:
+`up`, `esp32_sensor_ok` and `read_errors` were all healthy for the whole week.
+The symptom was a plausible number that never changed.
 
 ## Build and flash
 
@@ -102,11 +110,11 @@ to put the closet's AM2320 firmware on the indoor BME280 in a single command, an
 to leave the file un-reverted in the next commit. With environments the only way
 to get it wrong is to mistype `-e`, and `-e` is on the screen.
 
-| Environment | Sensor | Unit | id (MAC) | Address |
-| --- | --- | --- | --- | --- |
-| `closet` | AM2320 | closet intake | `10:00:3B:CC:E8:48` | 192.168.1.195 |
-| `closet` | AM2320 | closet exhaust | `10:00:3B:CC:A9:4C` | 192.168.1.112 |
-| `indoor` | BME280 | indoor | `08:92:72:91:5D:9C` | 192.168.1.156 |
+| Environment | Sensor | Unit | Display | id (MAC) | Address |
+| --- | --- | --- | --- | --- | --- |
+| `closet` | AM2320 | closet intake | none | `10:00:3B:CC:E8:48` | 192.168.1.195 |
+| `closet` | AM2320 | closet exhaust | none | `10:00:3B:CC:A9:4C` | 192.168.1.112 |
+| `indoor` | BME280 | indoor | TM1637 | `08:92:72:91:5D:9C` | 192.168.1.156 |
 
 `default_envs = closet`, because two of the three are that. **`intake` and
 `exhaust` are the role labels the two closet units are scraped under, not two
