@@ -39,6 +39,16 @@
 // センサを読む周期。AM2320 の下限は 2.0 秒なので余裕を持たせる。
 #define SENSOR_INTERVAL_MS 3000
 
+// Wi-Fi が切れた後のつなぎ直し。arduino-esp32 の自動つなぎ直しに任せると、
+// AP 側に「excessive missing ACKs」で切られた後、挿し直すまで二度と戻らなかった
+// （2026-10-11 20:27 吸気・10-12 01:58 排気。w3200 の hostapd に試みの跡が無い）。
+// ∴ 自分で数える。RECONNECT_EVERY ごとに WiFi.reconnect()、RESTART_AFTER 切れたままなら再起動。
+#define WIFI_RECONNECT_EVERY_MS 30000UL
+#define WIFI_RESTART_AFTER_MS   (5UL * 60 * 1000)
+// 起動時につながらず AP モードに落ちた時、保存済みの SSID があれば、AP に誰も
+// 乗っていない限りこの時間で再起動してつなぎ直す（AP のまま一生止まらないように）。
+#define AP_RETRY_RESTART_MS     (10UL * 60 * 1000)
+
 // I2C クロック。AM2320 は公称 100kHz までだが、実機（10cm のジャンパ、外付け 4.7k
 // プルアップ）で測ると 100kHz は 10 回中 10 回タイムアウト、80kHz 以下は CRC まで
 // 含めて 10/10 成功、という崖になっていた。境界から離して 50kHz を採る。
@@ -561,6 +571,46 @@ String makeScanHTML() {
     return s;
 }
 
+static bool staConfigured = false;   // 保存済みの SSID でつなぎに行ったか
+static unsigned long wifiDrops = 0;
+
+// STA で切れていたら、間をあけてつなぎ直し、長く切れたままなら再起動する。
+void keepWifi() {
+    static unsigned long downSince = 0;
+    static unsigned long lastTry = 0;
+    unsigned long now = millis();
+
+    if (WiFi.getMode() == WIFI_AP) {
+        if (staConfigured && now > AP_RETRY_RESTART_MS && WiFi.softAPgetStationNum() == 0) {
+            Serial.println("AP mode with stored SSID and no client. Restarting to retry STA...");
+            delay(100);
+            ESP.restart();
+        }
+        return;
+    }
+    if (WiFi.status() == WL_CONNECTED) {
+        downSince = 0;
+        return;
+    }
+    if (downSince == 0) {
+        downSince = now;
+        lastTry = now;
+        wifiDrops++;
+        Serial.println("WiFi lost.");
+        return;
+    }
+    if (now - downSince > WIFI_RESTART_AFTER_MS) {
+        Serial.println("WiFi down too long. Restarting...");
+        delay(100);
+        ESP.restart();
+    }
+    if (now - lastTry > WIFI_RECONNECT_EVERY_MS) {
+        Serial.println("WiFi reconnect...");
+        WiFi.reconnect();
+        lastTry = now;
+    }
+}
+
 void startAP() {
     Serial.println("Starting AP Mode...");
 
@@ -659,6 +709,7 @@ void setup() {
     bool connected = false;
 
     if (ssid.length() > 0) {
+        staConfigured = true;
         Serial.println("Connecting to WiFi...");
         WiFi.mode(WIFI_STA);
         WiFi.setTxPower(WIFI_POWER_8_5dBm);
@@ -749,6 +800,9 @@ void setup() {
         // 直近の戻り値。応答なし(接続失敗)と CRC 不一致は原因も対処も違う。
         json += ",\"last_rv\":" + String(sensorLastRv);
         json += ",\"wifi_connected\":" + String(up ? "true" : "false");
+        // 起動からの秒数と、起動後に切れた回数。落ちた理由を遠くから追うため。
+        json += ",\"uptime_s\":" + String(millis() / 1000);
+        json += ",\"wifi_drops\":" + String(wifiDrops);
         // 電波強度は繋がっている時だけ。AP モードでは意味を持たないので、
         // pressure と同じ流儀でキーごと出さない（null は返さない）。
         if (up) json += ",\"rssi\":" + String(WiFi.RSSI());
@@ -770,6 +824,7 @@ void loop() {
         dnsServer.processNextRequest();
     }
     server.handleClient();
+    keepWifi();
 
     static unsigned long lastUpdate = 0;
 #if USE_DISPLAY
